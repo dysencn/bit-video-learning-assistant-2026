@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>智慧课程平台 · 第 2 周原型</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">智</span><span>智慧课程平台</span></div>
+    <div class="week-tag">第 2 周 · 需求确认 demo</div>
+    <div class="health" id="health">检查服务中…</div>
+  </header>
+  <main>
+    <section class="hero">
+      <div>
+        <p class="eyebrow">SMART COURSE PLATFORM</p>
+        <h1>从课程资源到学习反馈的一条可验证流程</h1>
+        <p class="lead">本原型展示登录、课程、视频转课程、AI 助教、练习反馈与进度保存。页面中的“模拟”状态对应第 2 周原型，后续替换为真实模块。</p>
+      </div>
+      <div class="hero-flow"><span>发布资源</span><i>→</i><span>学习练习</span><i>→</i><span>反馈记录</span></div>
+    </section>
+
+    <section class="toolbar panel">
+      <div><strong>当前身份</strong><span id="userBadge" class="badge">未登录</span></div>
+      <div class="login-controls"><select id="role"><option value="student">学生</option><option value="teacher">教师</option><option value="admin">管理员</option></select><button id="loginBtn">登录演示账号</button></div>
+    </section>
+
+    <section class="grid two-col">
+      <article class="panel" id="coursesPanel">
+        <div class="section-head"><div><p class="eyebrow">P01</p><h2>课程与资源</h2></div><span class="status-dot">已发布</span></div>
+        <div id="courses" class="course-list"><div class="loading">正在读取课程…</div></div>
+        <p class="hint">验收点：课程带编号、负责人、进度和发布状态；草稿不会进入学生主流程。</p>
+      </article>
+
+      <article class="panel" id="videoPanel">
+        <div class="section-head"><div><p class="eyebrow">P02</p><h2>视频转课程</h2></div><span class="status-dot accent">AI 产物</span></div>
+        <p class="muted">上传视频或演示文本，原型会生成 PPTX、总结文档和题目 JSON。</p>
+        <form id="videoForm"><input id="videoFile" type="file" required><button type="submit">开始转换</button></form>
+        <div id="videoResult" class="result empty">等待上传文件</div>
+        <p class="hint">验收点：返回唯一任务 ID，三个产物可下载，重复上传产生新任务。</p>
+      </article>
+    </section>
+
+    <section class="grid two-col">
+      <article class="panel">
+        <div class="section-head"><div><p class="eyebrow">P03</p><h2>练习与进度</h2></div><span class="status-dot blue">可保存</span></div>
+        <form id="quizForm" class="quiz-form">
+          <label>1. Map 阶段的主要输出？<select name="q1"><option value="A">网页</option><option value="B">键值对</option><option value="C">数据库表</option></select></label>
+          <label>2. Reduce 阶段通常做什么？<select name="q2"><option value="A">采集视频</option><option value="B">按键分组并聚合</option><option value="C">创建用户</option></select></label>
+          <label>3. MapReduce 的价值？<select name="q3"><option value="A">只支持单机</option><option value="B">取消容错</option><option value="C">支持并行处理</option></select></label>
+          <button type="submit">提交并保存反馈</button>
+        </form>
+        <div id="quizResult" class="result empty">尚未提交练习</div>
+        <div class="progress-wrap"><div class="progress-label"><span>大数据分析基础</span><strong id="progressText">42%</strong></div><div class="progress"><span id="progressBar" style="width:42%"></span></div></div>
+      </article>
+
+      <article class="panel" id="aiPanel">
+        <div class="section-head"><div><p class="eyebrow">P04</p><h2>AI 助教</h2></div><span class="status-dot purple">API / mock</span></div>
+        <p class="muted">配置 <code>OPENAI_API_KEY</code> 时调用兼容接口，否则返回可解释的本地降级答案。</p>
+        <form id="aiForm"><textarea id="question" rows="3" placeholder="例如：MapReduce 的核心思想是什么？" required></textarea><button type="submit">询问 AI 助教</button></form>
+        <div id="aiResult" class="result empty">等待问题</div>
+      </article>
+    </section>
+
+    <section class="panel acceptance">
+      <div class="section-head"><div><p class="eyebrow">WEEK 2 EVIDENCE</p><h2>本周验收证据</h2></div><span class="status-dot">5 项</span></div>
+      <div class="evidence-list"><div><b>功能范围</b><span>11 个模块有负责人和验收入口</span></div><div><b>整体原型</b><span>角色、页面、主流程和视频扩展流程可说明</span></div><div><b>AI 过程</b><span>接口返回 provider、fallback、延迟和错误字段</span></div><div><b>每人展示</b><span>四张成果卡位于 PROJECT_PLAN.md 第 7 节</span></div><div><b>下周入口</b><span>先打通登录 → 课程 → 资源 → 练习 → 进度</span></div></div>
+    </section>
+  </main>
+  <footer>智慧课程平台 · 第 2 周需求确认原型 · 本地运行版本</footer>
+  <script src="/app.js"></script>
+</body>
+</html>

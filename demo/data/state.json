@@ -1,0 +1,71 @@
+{
+  "user": {
+    "id": "demo-student",
+    "name": "演示学生",
+    "role": "student",
+    "role_name": "学生"
+  },
+  "progress": {},
+  "last_job": {
+    "id": "e4a8d2b3a8",
+    "title": "sample-lecture",
+    "created_at": "2026-10-27T08:49:37+00:00",
+    "status": "completed"
+  },
+  "ai_logs": [
+    {
+      "request_id": "db4a4a3a-dadf-48e7-b99b-72da011b2042",
+      "provider": "mock",
+      "latency_ms": 0,
+      "status": "ok",
+      "fallback": true,
+      "error": null,
+      "created_at": "2026-10-27T08:49:26+00:00"
+    },
+    {
+      "request_id": "816e1d4e-66eb-4330-af3d-df281f578e86",
+      "provider": "mock",
+      "latency_ms": 0,
+      "status": "ok",
+      "fallback": true,
+      "error": null,
+      "created_at": "2026-10-27T09:31:20+00:00"
+    },
+    {
+      "request_id": "0a68d2fa-b1ab-4824-8a60-07f74d628081",
+      "provider": "mock",
+      "latency_ms": 0,
+      "status": "ok",
+      "fallback": true,
+      "error": null,
+      "created_at": "2026-10-27T09:31:23+00:00"
+    },
+    {
+      "request_id": "9c3877ba-a955-409d-be40-775aa47f580e",
+      "provider": "mock",
+      "latency_ms": 0,
+      "status": "ok",
+      "fallback": true,
+      "error": null,
+      "created_at": "2026-10-27T09:31:23+00:00"
+    },
+    {
+      "request_id": "1b7e555b-5f6c-408b-b612-22974915fc4e",
+      "provider": "mock",
+      "latency_ms": 0,
+      "status": "ok",
+      "fallback": true,
+      "error": null,
+      "created_at": "2026-10-27T09:31:24+00:00"
+    },
+    {
+      "request_id": "d86c44c7-b86a-47c6-ad17-8792c685debe",
+      "provider": "mock",
+      "latency_ms": 0,
+      "status": "ok",
+      "fallback": true,
+      "error": null,
+      "created_at": "2026-10-27T09:31:24+00:00"
+    }
+  ]
+}

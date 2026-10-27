@@ -1,0 +1,6 @@
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+numpy>=2.0,<3
+Pillow>=10.4,<13
+reportlab>=4.2,<5
+imageio-ffmpeg>=0.5,<1

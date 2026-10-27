@@ -1,65 +1,115 @@
-# 第 2 周智慧课程平台 demo
+# 知学 · 智慧学习平台 Demo
 
-这是一个零外部依赖的本地原型，用于展示第 2 周的需求确认、整体流程和接口可行性。服务端使用 Python 标准库，启动脚本会在项目目录内创建 `.venv`，不会改动系统 Python。
-
-启动脚本会先检查 `demo/.venv/Scripts/python.exe`。如果虚拟环境已存在，就直接复用并跳过创建和依赖下载；只有首次创建虚拟环境且目录中存在 `requirements.txt` 时，才会执行依赖安装，安装源固定为清华大学 PyPI 镜像：`https://pypi.tuna.tsinghua.edu.cn/simple`。当前 demo 没有外部依赖，因此不会下载第三方包。
+本地 Python 服务 + 原生 HTML/CSS/JavaScript。支持教师发布课程、学生学习与答题、自动评分、持久化学习记录，以及师生上传课程视频并提取课件图片、PDF 和音频。
 
 ## 启动
 
-PowerShell：
+需要 Python 3.10+。Windows 双击 `run.bat`，或者在本目录执行：
 
 ```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\run_demo.ps1
+python run.py
 ```
 
-Windows 命令提示符：
+启动脚本会创建本目录的 `.venv`，使用 **清华大学 PyPI 镜像**安装依赖和 FFmpeg：
 
-```bat
-run_demo.bat
+```text
+<项目虚拟环境的 Python> -m pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
-浏览器打开 <http://127.0.0.1:8000>。停止服务按 `Ctrl+C`。
-
-运行 `run_demo.bat` 或 `run_demo.ps1` 后，服务启动完成会自动打开默认浏览器并进入上述地址，无需手工输入。
-
-## 演示路径
-
-1. 点击“登录”，选择学生角色并查看课程列表。
-2. 在“视频转课程”选择 `sample-lecture.txt`，点击“开始转换”。页面会返回任务 ID、总结、题目和 PPTX 下载链接。
-3. 在“练习与进度”提交答案，查看分数和保存后的进度。
-4. 在“AI 助教”输入“MapReduce 的核心思想是什么？”。没有 API key 时显示 `mock`；配置 `OPENAI_API_KEY` 后会尝试调用 OpenAI 兼容的 Chat Completions 接口。
-
-## 可选 AI 配置
-
-PowerShell 示例：
+首次安装需要联网；之后依赖未变化时直接启动，不会重复安装。安装失败不会写入成功标记，重新运行会再次尝试。服务只监听本机，默认地址 `http://127.0.0.1:8765`，占用时自动尝试后续端口，以启动窗口的地址为准。保留启动窗口，按 `Ctrl+C` 停止。
 
 ```powershell
-$env:OPENAI_API_KEY = "你的密钥"
-$env:OPENAI_MODEL = "gpt-4o-mini"
-$env:OPENAI_BASE_URL = "https://api.openai.com/v1"
-.\run_demo.ps1
+python run.py --check                 # 准备并检查依赖后退出
+python run.py --no-browser --port 8800 # 指定端口，不自动打开浏览器
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
 ```
 
-调用失败时服务会返回本地降级回答，并在响应中标记 `fallback: true`，便于课堂演示和验收。
+macOS/Linux 的虚拟环境 Python 位于 `.venv/bin/python`。
 
-## API 入口
+## 账号、密码与登录
 
-| 方法 | 路径 | 用途 |
-| --- | --- | --- |
-| GET | `/api/health` | 健康检查 |
-| GET | `/api/courses` | 课程列表 |
-| GET | `/api/state` | 当前 demo 状态 |
-| POST | `/api/login` | 模拟登录 |
-| POST | `/api/video` | 上传并生成三类课程产物 |
-| POST | `/api/quiz/submit` | 提交练习并评分 |
-| POST | `/api/progress` | 保存学习进度 |
-| POST | `/api/ai/ask` | AI 助教，支持真实 API 或本地降级 |
+首页提供登录、注册和演示账号表。学生与教师都可以注册，账号为 3–32 位字母/数字/下划线（不区分大小写），密码为 6–128 个字符，姓名为 1–30 个字符。
 
-## 目录说明
+| 身份 | 姓名 | 账号 | 初始密码 |
+| --- | --- | --- | --- |
+| 教师 | 王老师 | teacher1 | Teach123! |
+| 教师 | 李老师 | teacher2 | Teach456! |
+| 学生 | 张同学 | student1 | Learn123! |
+| 学生 | 陈同学 | student2 | Learn456! |
 
-- `server.py`：本地服务端与最小 PPTX 生成器。
-- `web/`：原生前端页面。
-- `sample-lecture.txt`：可直接上传的演示输入。
-- `data/`：运行时生成，包含上传文件、课程产物和进度文件。
+点击“填入账号”→“登录”→“进入工作台”，会打开新标签页，登录页保留供继续登录其他账号。新注册账号也提供工作台入口。教师和学生、两个不同学生都可以在同一浏览器同时登录，标签页互不切换身份。
 
+- **账号文件：`data/accounts.json`**。按照本项目的课堂演示要求，账号密码以明文保存在此文件，不写入 LocalStorage 或 SessionStorage。文件首次启动自动生成，后续启动保留注册信息和修改后的密码。
+- 账号管理页面支持验证原密码后修改密码；退出登录会撤销当前登录会话。
+- 浏览器仅使用 HttpOnly Cookie 保存随机会话标识。页面 URL 的 `account` 是公开账号 ID，不是密码或登录凭证；服务端验证 Cookie 决定真实身份，不能通过修改 URL 或角色请求头取得教师权限。
+- 会话有效期 12 小时，服务重启后需重新登录；账号、课程、成绩和提取结果不丢失。
+- 首页只展示预置演示账号的当前密码，不公开自行注册的账号密码。请使用演示专用密码。
+- 教师只管理自己的课程并查看对应提交；学生只查看个人学习记录。各账号的视频任务独立保存，教师将自己的提取任务关联到已发布课程后，登录用户可以访问该课程资源。
+
+旧版数据会自动补上账号归属：原来的王老师课程、视频归到 `teacher1`，张同学的成绩归到 `student1`，已有内容和文件保留。
+
+## 多标签页与验收流程
+
+工作台、课程学习、课程创建/编辑、视频提取、学习记录、账号管理等模块入口均为新标签页链接。表单保存、评分反馈和任务进度在所属页面内更新。工作台和记录页重新获得焦点时自动刷新，也提供手动刷新按钮。
+
+建议按以下顺序演示：
+
+1. 使用 `teacher1` 登录并打开教师工作台，点击“创建课程”。
+2. 保存课程草稿，打开“添加资源与练习”，添加至少一份资源、一道单选题，点击发布。
+3. 回到保留的登录页，使用 `student1` 登录，打开学生工作台。
+4. 点击课程的“开始学习”，在新标签页查看资料、作答并提交。
+5. 查看即时得分、正确答案和已保存提示，打开“学习进度”查看个人记录。
+6. 回到教师工作台或“学习情况”页，查看学生姓名、提交时间、正确题数和成绩。
+7. 使用 `student2` 登录，验证其个人记录与 `student1` 独立。
+
+课程资源可以先登记说明；要提供实际可阅读的课件，请关联已完成的视频提取任务。默认附带 Python 示例课程与三道练习题。
+
+## 学生与教师的视频提取
+
+双方工作台均提供“上传与提取视频”入口：
+
+1. 选择或拖入视频，确认后上传到本机项目目录。
+2. 选择细致/均衡/精简模式，查看上传、识别、导出进度；支持取消。
+3. 完成后预览课件页面，下载 JPG 压缩包、图片式 PDF 和 MP3 音频。
+4. 教师可以在课程编辑页刷新提取结果，将完成的任务关联为课程资源；学生可直接打开课件。
+
+处理只在本机运行，不需要 API Key、Node.js 或显卡。每个任务输出位于 `data/jobs/<任务 ID>/`：
+
+```text
+job.json       # 账号归属、状态、参数、页码及时间
+slides/        # 去重后的原尺寸 JPG
+slides.pdf     # 图片式课件 PDF
+slides.zip     # 全部 JPG
+audio.mp3      # 第一条音轨；无音轨时不生成
+```
+
+源视频的上传副本在任务完成、失败或取消后删除，原始视频不受影响；生成资料可在刷新或重启后继续下载。保存位置由浏览器下载设置决定。
+
+适合 PPT/讲义占主要画面且有稳定停留的录像，使用 FFmpeg 缩略图流、帧差和感知哈希提取稳定页面。重复页面保留首次结果；动画、鼠标和摄像头可能造成多页或漏页，请核对预览。最多 600 页、单文件上限 8 GB，同一服务一次处理一个视频。无稳定页面时使用间隔截图并提示；无音轨时仍会生成图片和 PDF。
+
+**当前提取产物是 JPG/PDF/MP3，不是可编辑的 PPTX。语音转文字、AI API 总结、报告与自动出题尚未接入。** 可在后续智能学习模块中基于现有任务结果扩展。
+
+`VIDEO_DEMO_FFMPEG` 可指定 FFmpeg 路径，也可放入 `bin/ffmpeg.exe`；否则优先使用 PATH，再使用依赖中的 FFmpeg。`VIDEO_DEMO_DATA` 可更改任务目录，账号和学习数据随之存放在该目录的上级目录。
+
+## 代码结构与分工接口
+
+```text
+run.py / run.bat          # 虚拟环境、镜像安装、启动与环境检查
+requirements.txt         # 运行依赖
+demo/accounts.py         # 本地账号文件、注册、登录、改密、会话验证
+demo/app.py              # HTTP API、角色权限、课程、答题与学习记录
+demo/jobs.py             # 视频任务、账号归属、持久化、取消与恢复
+demo/media.py            # 本地 JPG/PDF/ZIP/MP3 提取算法
+web/index.html           # 页面入口与视频工作台模板
+web/app.js               # 登录、工作台、独立页面、课程与记录交互
+web/video.js             # 上传、任务进度、预览和下载
+web/style.css            # 界面样式与响应式布局
+tests/test_demo.py       # 真实 HTTP + FFmpeg 集成测试
+tests/test_bootstrap.py  # 镜像安装、复用与失败重试测试
+data/accounts.json       # 明文演示账号和注册账号
+data/learning-platform.json # 课程及学习记录
+```
+
+四人后续可分别主责：①用户/角色/工作台，②课程资源与教师发布，③学习活动/练习反馈/记录与统计，④视频处理与后续 AI API 学习能力。各自围绕对应模块补充需求、设计、实现和测试；模块通过当前 HTTP API 和账号 ID 互通。
+
+页面提取方法参考 [BIT 项目](https://github.com/lankerr/BIT_yanhe_download_2026)，此 Demo 使用独立的简化实现。

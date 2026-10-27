@@ -1,75 +1,43 @@
 <!doctype html>
 <html lang="zh-CN">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>智慧课程平台 · 第 2 周原型</title>
-  <link rel="stylesheet" href="/style.css">
+  <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>知学 · 智慧学习平台</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" type="module"></script>
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark">智</span><span>智慧课程平台</span></div>
-    <div class="week-tag">第 2 周 · 需求确认 demo</div>
-    <div class="health" id="health">检查服务中…</div>
-  </header>
+  <div id="platform"></div>
+  <template id="video-template">
   <main>
-    <section class="hero">
-      <div>
-        <p class="eyebrow">SMART COURSE PLATFORM</p>
-        <h1>从课程资源到学习反馈的一条可验证流程</h1>
-        <p class="lead">本原型展示登录、课程、视频转课程、AI 助教、练习反馈与进度保存。页面中的“模拟”状态对应第 2 周原型，后续替换为真实模块。</p>
+    <section class="intro"><div class="eyebrow">VIDEO → LEARNING MATERIALS</div><h1>把一段课程，<br>变成随时翻阅的资料。</h1><p>选择课程视频，自动整理课件页面与音频。<br class="mobile-break">处理完成后，保存 PDF、JPG 或 MP3。</p><div class="intro-tags"><span>无需 API</span><span>视频留在本机</span><span>轻量课件提取</span></div></section>
+    <section class="workspace">
+      <div class="panel upload-panel">
+        <div class="section-heading"><span class="step-number">01</span><div><h2>选择课程视频</h2><p>适合课件为主、画面相对稳定的课程录屏</p></div></div>
+        <label id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="选择视频文件">
+          <input id="file" type="file" accept="video/*,.mkv,.ts,.mts,.m4v" hidden>
+          <span class="upload-symbol" aria-hidden="true">↑</span>
+          <strong id="file-title">点击选择，或将视频拖到这里</strong>
+          <span id="file-detail">MP4 / MOV / MKV / AVI / WebM · 最大 8 GB</span>
+          <span class="select-link">打开文件管理器 ↗</span>
+        </label>
+        <div class="settings"><label for="profile">页面提取模式</label><select id="profile"><option value="balanced">均衡 · 推荐用于普通课程</option><option value="detailed">细致 · 保留更多局部内容变化</option><option value="compact">精简 · 减少相似页面</option></select><p id="profile-help">每秒检查 5 帧，等待画面稳定后保留页面，并去除重复内容。</p></div>
+        <button class="button primary" id="start" disabled>确认视频并开始整理 <span>→</span></button>
+        <p class="local-note">文件仅传入本机服务，不会发送到互联网。</p>
       </div>
-      <div class="hero-flow"><span>发布资源</span><i>→</i><span>学习练习</span><i>→</i><span>反馈记录</span></div>
+      <div class="panel status-panel">
+        <div class="section-heading"><span class="step-number">02</span><div><h2>整理与导出</h2><p>从视频到可保存的学习资料</p></div></div>
+        <div id="idle" class="idle-state"><div class="page-stack"><span></span><span></span><span>PDF<br><small>课程资料</small></span></div><h3>等你放入第一段视频</h3><p>提取清晰页面，按出现顺序合成 PDF，<br>再将音频单独保存为 MP3。</p></div>
+        <div id="processing" hidden aria-live="polite"><div class="processing-top"><span id="state-label">正在处理</span><strong id="percent">0%</strong></div><progress id="progress" max="100" value="0"></progress><p id="message">准备开始</p><ol class="stage-list"><li data-stage="uploading">视频传入本机</li><li data-stage="scanning">识别稳定画面</li><li data-stage="extracting">导出 JPG 与 PDF</li><li data-stage="audio">单独提取音频</li></ol><button class="button secondary" id="cancel">取消当前任务</button></div>
+        <div id="result" hidden aria-live="polite"><div class="success-icon">✓</div><h3>学习资料已就绪</h3><p id="result-meta"></p><div id="warnings"></div><div class="download-list"><a class="download-link primary-download" id="pdf-download" href="#" download><span><b>课件 PDF</b><small>按原画面比例，一页一张</small></span><span>保存 ↓</span></a><a class="download-link" id="audio-download" href="#" download><span><b>课程音频 MP3</b><small>可独立播放，方便回听</small></span><span>保存 ↓</span></a><a class="download-link" id="zip-download" href="#" download><span><b>全部课件 JPG</b><small>图片压缩包，保留清晰原图</small></span><span>保存 ↓</span></a></div><p class="save-note">保存位置由浏览器决定；可在浏览器下载设置中开启“每次询问保存位置”。</p></div>
+        <div id="error" class="error-box" hidden role="alert"></div>
+      </div>
     </section>
-
-    <section class="toolbar panel">
-      <div><strong>当前身份</strong><span id="userBadge" class="badge">未登录</span></div>
-      <div class="login-controls"><select id="role"><option value="student">学生</option><option value="teacher">教师</option><option value="admin">管理员</option></select><button id="loginBtn">登录演示账号</button></div>
-    </section>
-
-    <section class="grid two-col">
-      <article class="panel" id="coursesPanel">
-        <div class="section-head"><div><p class="eyebrow">P01</p><h2>课程与资源</h2></div><span class="status-dot">已发布</span></div>
-        <div id="courses" class="course-list"><div class="loading">正在读取课程…</div></div>
-        <p class="hint">验收点：课程带编号、负责人、进度和发布状态；草稿不会进入学生主流程。</p>
-      </article>
-
-      <article class="panel" id="videoPanel">
-        <div class="section-head"><div><p class="eyebrow">P02</p><h2>视频转课程</h2></div><span class="status-dot accent">AI 产物</span></div>
-        <p class="muted">上传视频或演示文本，原型会生成 PPTX、总结文档和题目 JSON。</p>
-        <form id="videoForm"><input id="videoFile" type="file" required><button type="submit">开始转换</button></form>
-        <div id="videoResult" class="result empty">等待上传文件</div>
-        <p class="hint">验收点：返回唯一任务 ID，三个产物可下载，重复上传产生新任务。</p>
-      </article>
-    </section>
-
-    <section class="grid two-col">
-      <article class="panel">
-        <div class="section-head"><div><p class="eyebrow">P03</p><h2>练习与进度</h2></div><span class="status-dot blue">可保存</span></div>
-        <form id="quizForm" class="quiz-form">
-          <label>1. Map 阶段的主要输出？<select name="q1"><option value="A">网页</option><option value="B">键值对</option><option value="C">数据库表</option></select></label>
-          <label>2. Reduce 阶段通常做什么？<select name="q2"><option value="A">采集视频</option><option value="B">按键分组并聚合</option><option value="C">创建用户</option></select></label>
-          <label>3. MapReduce 的价值？<select name="q3"><option value="A">只支持单机</option><option value="B">取消容错</option><option value="C">支持并行处理</option></select></label>
-          <button type="submit">提交并保存反馈</button>
-        </form>
-        <div id="quizResult" class="result empty">尚未提交练习</div>
-        <div class="progress-wrap"><div class="progress-label"><span>大数据分析基础</span><strong id="progressText">42%</strong></div><div class="progress"><span id="progressBar" style="width:42%"></span></div></div>
-      </article>
-
-      <article class="panel" id="aiPanel">
-        <div class="section-head"><div><p class="eyebrow">P04</p><h2>AI 助教</h2></div><span class="status-dot purple">API / mock</span></div>
-        <p class="muted">配置 <code>OPENAI_API_KEY</code> 时调用兼容接口，否则返回可解释的本地降级答案。</p>
-        <form id="aiForm"><textarea id="question" rows="3" placeholder="例如：MapReduce 的核心思想是什么？" required></textarea><button type="submit">询问 AI 助教</button></form>
-        <div id="aiResult" class="result empty">等待问题</div>
-      </article>
-    </section>
-
-    <section class="panel acceptance">
-      <div class="section-head"><div><p class="eyebrow">WEEK 2 EVIDENCE</p><h2>本周验收证据</h2></div><span class="status-dot">5 项</span></div>
-      <div class="evidence-list"><div><b>功能范围</b><span>11 个模块有负责人和验收入口</span></div><div><b>整体原型</b><span>角色、页面、主流程和视频扩展流程可说明</span></div><div><b>AI 过程</b><span>接口返回 provider、fallback、延迟和错误字段</span></div><div><b>每人展示</b><span>四张成果卡位于 PROJECT_PLAN.md 第 7 节</span></div><div><b>下周入口</b><span>先打通登录 → 课程 → 资源 → 练习 → 进度</span></div></div>
-    </section>
+    <section id="preview-section" class="preview-section" hidden><div class="preview-heading"><div><span class="eyebrow">EXTRACTED PAGES</span><h2>课件预览 <span id="page-count"></span></h2></div><p>点击查看原图 · 时间为页面代表帧位置</p></div><div id="gallery" class="gallery"></div></section>
+    <section id="history-section" class="history-section" hidden><div class="preview-heading"><h2>最近任务</h2><span>刷新网页后仍可继续查看</span></div><div id="history"></div></section>
+    <footer>知学 · 本地视频学习工作台 <span>JPG 页面检测 / PDF 合并 / 音频提取</span></footer>
   </main>
-  <footer>智慧课程平台 · 第 2 周需求确认原型 · 本地运行版本</footer>
-  <script src="/app.js"></script>
+  <dialog id="image-dialog"><div class="dialog-bar"><span id="dialog-caption"></span><button id="close-dialog" aria-label="关闭原图">✕</button></div><img id="dialog-image" alt="课件原图"></dialog>
+  </template>
 </body>
 </html>

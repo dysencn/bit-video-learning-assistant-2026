@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
+import mimetypes
 import os
 from pathlib import Path
 import re
@@ -22,10 +23,42 @@ from .jobs import BusyError, JobManager
 from .media import PROFILES
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 
+# Windows 下 Python 的 mimetypes 会把 .js 识别为 text/plain，浏览器会拒绝执行
+# 前端 module script，导致页面空白。这里强制修正为 application/javascript。
+mimetypes.add_type("application/javascript", ".js")
+mimetypes.add_type("text/css", ".css")
+
 ROOT = Path(__file__).resolve().parent.parent
 MAX_BYTES = 8 * 1024**3
 EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".mts"}
 TOKEN = secrets.token_urlsafe(32)
+
+# 预置课程使用的默认知识点（教师可继续手动维护课程内的知识点列表）。
+DEFAULT_KNOWLEDGE_POINTS = [
+    {"id": "kp1", "name": "变量与数据类型"},
+    {"id": "kp2", "name": "字符串类型"},
+    {"id": "kp3", "name": "print 输出函数"},
+]
+DEFAULT_KP_MAP = {"q1": "kp1", "q2": "kp2", "q3": "kp3"}
+
+
+def _within_seconds(left: str, right: str, seconds: int) -> bool:
+    """比较两条 ISO 时间戳是否在 seconds 秒以内（用于防重复提交）。"""
+    try:
+        delta = datetime.fromisoformat(left) - datetime.fromisoformat(right)
+    except (TypeError, ValueError):
+        return False
+    return abs(delta.total_seconds()) <= seconds
+
+
+def _answers_signature(answers: dict) -> list:
+    """把答题内容归一为可比较的签名：仅当两次提交的答案完全一致才视为同次重复。"""
+    return sorted((str(key), int(value)) for key, value in answers.items() if value is not None)
+
+
+def _days_later(days: int) -> str:
+    """返回当前 UTC 时间 days 天后的 ISO 时间戳（复习计划引擎调度用）。"""
+    return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
 
 
 class LearningStore:
@@ -38,7 +71,7 @@ class LearningStore:
     def __init__(self, path: Path):
         self.path = path
         self.lock = threading.RLock()
-        self.data = {"courses": [], "submissions": []}
+        self.data = {"courses": [], "submissions": [], "wrong_questions": []}
         if path.is_file():
             try:
                 self.data.update(json.loads(path.read_text(encoding="utf-8")))
@@ -49,21 +82,44 @@ class LearningStore:
                 "id": "course-demo", "title": "Python 程序设计入门", "description": "认识变量、条件判断与基本程序结构。",
                 "teacher": "王老师", "status": "published", "created_at": self.now(),
                 "resources": [{"id": "res-demo", "name": "第一讲：变量与数据类型", "kind": "课件", "job_id": None}],
+                "knowledge_points": [dict(kp) for kp in DEFAULT_KNOWLEDGE_POINTS],
                 "questions": [
-                    {"id": "q1", "text": "Python 中用于保存数据的命名空间通常称为？", "options": ["变量", "函数", "循环", "模块"], "answer": 0},
-                    {"id": "q2", "text": "下面哪个是 Python 的字符串？", "options": ["123", "True", "\"学习平台\"", "3.14"], "answer": 2},
-                    {"id": "q3", "text": "print() 的主要作用是？", "options": ["输出内容", "删除文件", "创建数据库", "安装软件"], "answer": 0},
+                    {"id": "q1", "text": "Python 中用于保存数据的命名空间通常称为？", "options": ["变量", "函数", "循环", "模块"], "answer": 0, "knowledge_point_id": "kp1"},
+                    {"id": "q2", "text": "下面哪个是 Python 的字符串？", "options": ["123", "True", "\"学习平台\"", "3.14"], "answer": 2, "knowledge_point_id": "kp2"},
+                    {"id": "q3", "text": "print() 的主要作用是？", "options": ["输出内容", "删除文件", "创建数据库", "安装软件"], "answer": 0, "knowledge_point_id": "kp3"},
                 ],
             }]
             self.save()
         migrated = False
+        if "wrong_questions" not in self.data:
+            self.data["wrong_questions"] = []
+            migrated = True
         for course in self.data["courses"]:
             if "teacher_id" not in course:
                 course["teacher_id"] = DEMO_TEACHER
                 migrated = True
+            if "questions" not in course or not isinstance(course["questions"], list):
+                course["questions"] = []
+                migrated = True
+            if "knowledge_points" not in course or not isinstance(course["knowledge_points"], list):
+                course["knowledge_points"] = [dict(kp) for kp in DEFAULT_KNOWLEDGE_POINTS] if course["id"] == "course-demo" else []
+                migrated = True
+            kp_ids = {kp["id"] for kp in course["knowledge_points"]}
+            for question in course["questions"]:
+                if "knowledge_point_id" not in question:
+                    question["knowledge_point_id"] = DEFAULT_KP_MAP.get(question["id"]) if course["id"] == "course-demo" and DEFAULT_KP_MAP.get(question["id"]) in kp_ids else None
+                    migrated = True
         for record in self.data["submissions"]:
             if "student_id" not in record:
                 record["student_id"] = DEMO_STUDENT
+                migrated = True
+        for record in self.data.setdefault("wrong_questions", []):
+            if "review_interval_days" not in record:
+                record["review_interval_days"] = 1
+                record["review_count"] = 0
+                record["first_wrong_at"] = record.get("last_wrong_at", self.now())
+                # 旧记录没有调度数据：默认立即进入复习队列。
+                record["next_review_at"] = record.get("last_wrong_at", self.now())
                 migrated = True
         if migrated:
             self.save()
@@ -123,8 +179,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' blob:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'"
-        if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
+        # 本地 demo 不做缓存：避免浏览器缓存旧版静态资源（如 MIME 修正前的 app.js）。
+        response.headers["Cache-Control"] = "no-store"
         return response
 
     @app.get("/")
@@ -247,8 +303,21 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if type(answer) is not int or not 0 <= answer < len(options):
             raise HTTPException(400, "请选择正确答案")
         with request.app.state.learning.lock:
+            # 知识点关联：可直接传 knowledge_point_id，也可传 knowledge_point 名称自动挂到课程知识点列表。
+            knowledge_point_id = payload.get("knowledge_point_id")
+            kp_name = str(payload.get("knowledge_point", "")).strip()
+            kp_list = course.setdefault("knowledge_points", [])
+            if kp_name and knowledge_point_id not in {kp["id"] for kp in kp_list}:
+                existing = next((kp for kp in kp_list if kp["name"] == kp_name), None)
+                if existing:
+                    knowledge_point_id = existing["id"]
+                else:
+                    kp = {"id": uuid.uuid4().hex[:10], "name": kp_name[:50]}
+                    kp_list.append(kp)
+                    knowledge_point_id = kp["id"]
             course["questions"].append({"id": uuid.uuid4().hex[:10], "text": text[:300],
-                                        "options": [str(item).strip()[:100] for item in options[:4]], "answer": answer})
+                                        "options": [str(item).strip()[:100] for item in options[:4]], "answer": answer,
+                                        "knowledge_point_id": knowledge_point_id})
             request.app.state.learning.save()
         return request.app.state.learning.public_course(course, include_answers=True)
 
@@ -289,9 +358,51 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                       "student": user["name"], "student_id": user["id"],
                       "submitted_at": LearningStore.now(), "score": round(correct / len(course["questions"]) * 100),
                       "correct_count": correct, "total": len(course["questions"]), "details": details}
-        with request.app.state.learning.lock:
-            request.app.state.learning.data["submissions"].insert(0, submission)
-            request.app.state.learning.save()
+        store = request.app.state.learning
+        with store.lock:
+            # 防重复提交：同一学生同一课程在 5 秒内提交了完全相同的答案，视为同次重复点击，返回最近一次记录，不新增。
+            signature = _answers_signature(answers)
+            recent = next((r for r in store.data["submissions"]
+                           if r["student_id"] == user["id"] and r["course_id"] == course_id
+                           and _within_seconds(r["submitted_at"], submission["submitted_at"], 5)
+                           and _answers_signature({d["question_id"]: d["selected"] for d in r["details"]}) == signature), None)
+            if recent:
+                return recent
+            store.data["submissions"].insert(0, submission)
+            # 错题自动归档：答错的题目进入错题本，同一道题不重复新增，只累加错误次数。
+            kp_index = {kp["id"]: kp["name"] for kp in course.get("knowledge_points", [])}
+            question_by_id = {question["id"]: question for question in course["questions"]}
+            wrong_book = store.data.setdefault("wrong_questions", [])
+            existing = {w["question_id"]: w for w in wrong_book if w["student_id"] == user["id"] and w["course_id"] == course_id}
+            for detail in details:
+                if not detail["correct"]:
+                    question = question_by_id.get(detail["question_id"], {})
+                    kp_id = question.get("knowledge_point_id")
+                    record = existing.get(detail["question_id"])
+                    if record:
+                        record["wrong_count"] += 1
+                        record["last_wrong_at"] = submission["submitted_at"]
+                        record["status"] = "unresolved"
+                        record["knowledge_point_id"] = kp_id
+                        record["knowledge_point_name"] = kp_index.get(kp_id, "未分类")
+                        # 做题又答错：说明仍未掌握，复习调度重置为 1 天后。
+                        record["review_interval_days"] = 1
+                        record["next_review_at"] = _days_later(1)
+                    else:
+                        record = {"id": uuid.uuid4().hex[:12], "student_id": user["id"], "course_id": course_id,
+                                  "question_id": detail["question_id"], "knowledge_point_id": kp_id,
+                                  "knowledge_point_name": kp_index.get(kp_id, "未分类"),
+                                  "question_snapshot": {"text": question.get("text", detail["text"]),
+                                                        "options": question.get("options", detail.get("options", [])),
+                                                        "answer": question.get("answer", detail["answer"])},
+                                  "wrong_count": 1, "last_wrong_at": submission["submitted_at"],
+                                  "first_wrong_at": submission["submitted_at"],
+                                  "status": "unresolved",
+                                  "review_interval_days": 1, "next_review_at": _days_later(1),
+                                  "review_count": 0}
+                        existing[detail["question_id"]] = record
+                        wrong_book.append(record)
+            store.save()
         return submission
 
     @app.get("/api/learning-records")
@@ -304,6 +415,77 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             records = [r for r in store.data["submissions"] if
                        (r["course_id"] in own_courses if user["role"] == "teacher" else r["student_id"] == user["id"])]
             return [{**r, "course_name": courses.get(r["course_id"], {}).get("title", "已删除课程")} for r in records]
+
+    @app.get("/api/wrong-questions")
+    async def wrong_questions(request: Request):
+        user = require_role(request, "student")
+        store = request.app.state.learning
+        with store.lock:
+            return [dict(record) for record in store.data.setdefault("wrong_questions", [])
+                    if record["student_id"] == user["id"]]
+
+    @app.post("/api/wrong-questions/{question_id}/mastered")
+    async def mark_mastered(request: Request, question_id: str):
+        user = require_role(request, "student")
+        store = request.app.state.learning
+        with store.lock:
+            record = next((r for r in store.data.setdefault("wrong_questions", [])
+                           if r["id"] == question_id and r["student_id"] == user["id"]), None)
+            if not record:
+                raise HTTPException(404, "错题记录不存在")
+            record["status"] = "mastered"
+            record["mastered_at"] = LearningStore.now()
+            store.save()
+            return dict(record)
+
+    @app.get("/api/review/due")
+    async def review_due(request: Request):
+        """复习计划引擎：返回当前学生所有待复习错题，按到期状态排序（逾期在前）。"""
+        user = require_role(request, "student")
+        store = request.app.state.learning
+        with store.lock:
+            records = [dict(r) for r in store.data.setdefault("wrong_questions", [])
+                       if r["student_id"] == user["id"] and r["status"] == "unresolved"]
+        now = LearningStore.now()
+        records.sort(key=lambda r: (0 if r.get("next_review_at", "") <= now else 1, r.get("next_review_at", "")))
+        return records
+
+    @app.post("/api/wrong-questions/{question_id}/review")
+    async def review_question(request: Request, question_id: str):
+        """复习作答：答对则间隔翻倍（封顶 14 天，连续间隔满 14 天自动视为掌握）；答错则重置为 1 天。"""
+        user = require_role(request, "student")
+        payload = await json_object(request)
+        selected = payload.get("selected")
+        store = request.app.state.learning
+        with store.lock:
+            record = next((r for r in store.data.setdefault("wrong_questions", [])
+                           if r["id"] == question_id and r["student_id"] == user["id"]), None)
+            if not record:
+                raise HTTPException(404, "错题记录不存在")
+            snapshot = record["question_snapshot"]
+            options, answer = snapshot["options"], snapshot["answer"]
+            if type(selected) is not int or not 0 <= selected < len(options):
+                raise HTTPException(400, "请选择有效选项")
+            correct = selected == answer
+            now = LearningStore.now()
+            record["last_reviewed_at"] = now
+            record["review_count"] = record.get("review_count", 0) + 1
+            record["last_review_result"] = correct
+            if correct:
+                interval = min(record.get("review_interval_days", 1) * 2, 14)
+                record["review_interval_days"] = interval
+                record["next_review_at"] = _days_later(interval)
+                if interval >= 14:
+                    record["status"] = "mastered"
+                    record["mastered_at"] = now
+            else:
+                record["wrong_count"] += 1
+                record["last_wrong_at"] = now
+                record["review_interval_days"] = 1
+                record["next_review_at"] = _days_later(1)
+                record["status"] = "unresolved"
+            store.save()
+            return {**dict(record), "correct": correct, "answer": answer}
 
     @app.get("/api/jobs")
     async def list_jobs(request: Request):

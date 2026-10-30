@@ -32,7 +32,7 @@ function tell(message) {
 }
 function nav() {
   return `<header class="nav"><a class="brand" href="/" target="_blank" rel="noopener">知学 <small>SMART LEARNING</small></a>
-    ${user ? `<nav class="nav-links" aria-label="主导航">${link("dashboard", "工作台", "nav-link")}${link("video", "视频提取", "nav-link")}${link("records", user.role === "teacher" ? "学习情况" : "学习记录", "nav-link")}${link("account", "账号管理", "nav-link")}</nav><span class="identity">${esc(user.name)} · ${roleName(user.role)}</span><button class="ghost" id="logout">退出</button>` : '<span class="identity">智慧课程平台 · 本地演示</span>'}</header><div class="notice" role="status" hidden></div>`;
+    ${user ? `<nav class="nav-links" aria-label="主导航">${link("dashboard", "工作台", "nav-link")}${link("video", "视频提取", "nav-link")}${user.role === "student" ? link("review", "今日复习", "nav-link") + link("wrong", "我的错题", "nav-link") : ""}${link("records", user.role === "teacher" ? "学习情况" : "学习记录", "nav-link")}${link("account", "账号管理", "nav-link")}</nav><span class="identity">${esc(user.name)} · ${roleName(user.role)}</span><button class="ghost" id="logout">退出</button>` : '<span class="identity">智慧课程平台 · 本地演示</span>'}</header><div class="notice" role="status" hidden></div>`;
 }
 function layout(content, title) {
   document.title = `${title} · 知学`;
@@ -138,7 +138,7 @@ async function editCoursePage() {
   if (course.teacher_id !== user.id) throw new Error("只能编辑自己创建的课程");
   layout(`<div class="learning-panel"><span class="eyebrow">COURSE EDITOR</span><h1>${esc(course.title)}</h1><p class="muted">${esc(course.description)}</p><div class="actions"><span class="tag ${course.status}">${course.status === "published" ? "已发布" : "草稿"}</span>${link("video", "提取新的视频资源")}<button class="ghost" id="refresh">刷新提取结果</button></div>
     <section class="editor"><h2>学习资源</h2><div class="editor-list">${course.resources.map(r => `<div>${esc(r.name)} · ${esc(r.kind)}${r.job_id ? " · 已关联课件" : ""}</div>`).join("") || "暂无资源"}</div><form id="resource-form"><div class="resource-fields"><label>资源名称<input name="name" maxlength="100" required></label><label>类型<select name="kind"><option>课件</option><option>视频</option><option>文档</option></select></label><label>关联提取结果<select name="job_id"><option value="">不关联（仅登记资源说明）</option>${jobs.filter(j => j.status === "completed").map(j => `<option value="${esc(j.id)}">${esc(j.filename)}</option>`).join("")}</select></label></div><div class="actions"><button class="secondary" type="submit">添加学习资源</button></div></form></section>
-    <section class="editor"><h2>单选练习题</h2><div class="editor-list">${course.questions.map((q,i) => `<div>${i + 1}. ${esc(q.text)} · 答案：${esc(q.options[q.answer])}</div>`).join("") || "暂无练习题"}</div><form id="question-form"><label>题目<input name="text" maxlength="300" required></label><label>选项（2–4 项，用 | 分隔）<input name="options" placeholder="选项 A | 选项 B | 选项 C | 选项 D" required></label><label>正确答案<select name="answer"><option value="0">第 1 项</option><option value="1">第 2 项</option><option value="2">第 3 项</option><option value="3">第 4 项</option></select></label><div class="actions"><button class="secondary" type="submit">添加练习题</button></div></form></section>
+    <section class="editor"><h2>单选练习题</h2><div class="editor-list">${course.questions.map((q,i) => `<div>${i + 1}. ${esc(q.text)} · 答案：${esc(q.options[q.answer])}${q.knowledge_point_id ? ` · 知识点：${esc((course.knowledge_points || []).find(kp => kp.id === q.knowledge_point_id)?.name || "")}` : ""}</div>`).join("") || "暂无练习题"}</div><form id="question-form"><label>题目<input name="text" maxlength="300" required></label><label>选项（2–4 项，用 | 分隔）<input name="options" placeholder="选项 A | 选项 B | 选项 C | 选项 D" required></label><label>正确答案<select name="answer"><option value="0">第 1 项</option><option value="1">第 2 项</option><option value="2">第 3 项</option><option value="3">第 4 项</option></select></label><label>知识点（可选）<input name="knowledge_point" maxlength="50" placeholder="例如：字符串操作"></label><div class="actions"><button class="secondary" type="submit">添加练习题</button></div></form></section>
     <div class="actions"><button class="primary" id="publish" ${course.status === "published" ? "disabled" : ""}>${course.status === "published" ? "课程已发布" : "确认并发布课程"}</button>${link("dashboard", "教师工作台")}</div><p class="muted">发布前至少需要一份资源和一道练习题。</p></div>`, "编辑与发布");
   root.querySelector("#refresh").onclick = () => editCoursePage().catch(e => tell(e.message));
   bindForm("#resource-form", async data => {
@@ -146,7 +146,7 @@ async function editCoursePage() {
     await editCoursePage(); tell("资源已加入课程");
   });
   bindForm("#question-form", async data => {
-    await post(`/api/courses/${id}/questions`, {...data, options:data.options.split("|").map(o => o.trim()), answer:Number(data.answer)});
+    await post(`/api/courses/${id}/questions`, {...data, options:data.options.split("|").map(o => o.trim()), answer:Number(data.answer), knowledge_point:data.knowledge_point || ""});
     await editCoursePage(); tell("练习题已加入课程");
   });
   root.querySelector("#publish").onclick = async () => {
@@ -165,6 +165,58 @@ async function recordsPage() {
   }).join("");
   layout(`<div class="section-title"><div><span class="eyebrow">LEARNING PROGRESS</span><h1>${teacher ? "学生学习情况" : "我的学习进度"}</h1><p class="muted">${teacher ? "查看自己课程的学生提交与成绩。" : "按课程查看练习完成情况，回顾每一次反馈。"}</p></div><button class="ghost" id="refresh">刷新记录</button></div><section><h2>课程进度</h2><div class="record-list">${summaries || '<div class="empty">暂无课程。</div>'}</div></section><section><h2>练习提交记录</h2>${recordList(logs, teacher)}</section>`, teacher ? "学生学习情况" : "学习进度");
   root.querySelector("#refresh").onclick = () => recordsPage().catch(e => tell(e.message));
+}
+
+async function wrongPage() {
+  if (user.role !== "student") throw new Error("只有学生可以查看错题本");
+  const items = await api("/api/wrong-questions");
+  const groups = {};
+  for (const item of items) (groups[item.knowledge_point_name || "未分类"] ??= []).push(item);
+  const body = Object.keys(groups).length ? Object.keys(groups).map(name => `<section><div class="section-title"><div><span class="eyebrow">KNOWLEDGE POINT</span><h2>${esc(name)}</h2></div><span class="tag">${groups[name].length} 题</span></div><div class="record-list">${groups[name].map(w => `<div class="record-row"><div><b>${esc(w.question_snapshot.text)}</b><small>答错 ${w.wrong_count} 次 · ${w.status === "mastered" ? "已掌握" : "待复习"} · 最近 ${date(w.last_wrong_at)}${w.status !== "mastered" ? ` · 下次复习：${new Date(w.next_review_at) <= new Date() ? "今天到期" : `${Math.round((new Date(w.next_review_at) - new Date()) / 86400000)} 天后`}` : ""}</small></div><strong class="score">${esc(w.question_snapshot.options[w.question_snapshot.answer] ?? "")}<small>正确答案</small></strong></div><div class="actions">${w.status === "mastered" ? `<span class="tag">已掌握</span>` : `<button class="secondary master-btn" data-id="${esc(w.id)}">标记已掌握</button>`}</div></div>`).join("")}</div></section>`).join("") : '<div class="record-list empty">暂无错题，继续保持。</div>';
+  layout(`<div class="section-title"><div><span class="eyebrow">WRONG QUESTION BOOK</span><h1>我的错题本</h1><p class="muted">答错的题目已自动归档，按知识点分组展示，为个性化推荐提供依据。</p></div><button class="ghost" id="refresh">刷新</button></div>${body}`, "我的错题");
+  root.querySelectorAll(".master-btn").forEach(button => button.onclick = async () => {
+    try { await post(`/api/wrong-questions/${encodeURIComponent(button.dataset.id)}/mastered`); await wrongPage(); tell("已标记为掌握"); }
+    catch (error) { tell(error.message); }
+  });
+  root.querySelector("#refresh").onclick = () => wrongPage().catch(e => tell(e.message));
+}
+
+async function reviewPage(message = "") {
+  if (user.role !== "student") throw new Error("只有学生可以使用复习计划");
+  const items = await api("/api/review/due");
+  const now = new Date();
+  const due = items.filter(w => new Date(w.next_review_at) <= now);
+  const pending = items.filter(w => new Date(w.next_review_at) > now);
+  const daysUntil = next => Math.max(0, Math.round((new Date(next) - now) / 86400000));
+  // 薄弱知识点：逾期题数优先，其次总错次
+  const stats = {};
+  for (const w of items) {
+    const key = w.knowledge_point_name || "未分类";
+    const stat = (stats[key] ??= {due: 0, count: 0, wrong: 0});
+    stat.count += 1;
+    stat.wrong += w.wrong_count;
+    if (new Date(w.next_review_at) <= now) stat.due += 1;
+  }
+  const rank = Object.keys(stats).map(name => ({name, ...stats[name]})).sort((a, b) => b.due - a.due || b.wrong - a.wrong);
+  const reviewForm = due.length ? `<form id="review-form"><h2>今日复习（${due.length} 题到期）</h2><p class="muted">逐题作答后提交，答对则复习间隔翻倍，答错则回到 1 天。</p><div class="questions">${due.map((w, i) => `<fieldset class="question"><legend>${i + 1}. ${esc(w.question_snapshot.text)} <span class="tag">${esc(w.knowledge_point_name)}</span></legend>${w.question_snapshot.options.map((option, oi) => `<label class="option"><input type="radio" name="${esc(w.id)}" value="${oi}" required> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交复习结果</button></div><div id="review-result" aria-live="polite"></div></form>` : '<div class="record-list empty">今天没有到期的错题，全部复习完成，继续保持。</div>';
+  layout(`<div class="section-title"><div><span class="eyebrow">SPACED REPETITION</span><h1>复习计划</h1><p class="muted">按遗忘曲线安排错题复习：间隔 1 → 2 → 4 → 8 天，答对翻倍，答错重置。</p></div><button class="ghost" id="refresh">刷新</button></div>
+    ${message ? `<div class="result"><p>${esc(message)}</p></div>` : ""}
+    <section><div class="section-title"><div><span class="eyebrow">WEAK POINTS</span><h2>薄弱知识点</h2></div></div><div class="record-list">${rank.map(s => `<div class="record-row"><div><b>${esc(s.name)}</b><small>${s.due} 题待复习 · 累计 ${s.count} 题错题 · 共错 ${s.wrong} 次</small></div><strong class="score">${s.due ? `${s.due} 题到期` : "复习中"}</strong></div>`).join("") || '<div class="record-list empty">暂无错题数据。</div>'}</div></section>
+    <section>${reviewForm}</section>
+    ${pending.length ? `<section><div class="section-title"><div><span class="eyebrow">UPCOMING</span><h2>后续复习安排</h2></div></div><div class="record-list">${pending.map(w => `<div class="record-row"><div><b>${esc(w.question_snapshot.text)}</b><small>${esc(w.knowledge_point_name)} · 已复习 ${w.review_count} 次</small></div><strong class="score">${daysUntil(w.next_review_at)} 天后<small>下次复习</small></strong></div>`).join("")}</div></section>` : ""}`, "今日复习");
+  const form = root.querySelector("#review-form");
+  if (form) bindForm("#review-form", async answers => {
+    const entries = Object.entries(answers);
+    const results = await Promise.all(entries.map(async ([id, selected]) => {
+      const r = await post(`/api/wrong-questions/${encodeURIComponent(id)}/review`, {selected:Number(selected)});
+      return {id, correct:r.correct, interval:r.review_interval_days, status:r.status, answer:r.answer, snapshot:r.question_snapshot};
+    }));
+    const summary = results.map(r => `${r.correct ? "✓" : "✗"} ${esc(r.snapshot.text)}：${r.correct ? `下次 ${r.interval} 天后复习` : "回到 1 天后复习"}`).join("<br>");
+    root.querySelector("#review-result").innerHTML = `<div class="result"><h2>本次复习完成 ${results.filter(r => r.correct).length}/${results.length}</h2><p>${summary}</p></div>`;
+    root.querySelector("#review-result").scrollIntoView({behavior:"smooth", block:"nearest"});
+    await reviewPage("复习结果已更新，未掌握的题目继续留在复习队列。");
+  });
+  root.querySelector("#refresh").onclick = () => reviewPage().catch(e => tell(e.message));
 }
 
 async function accountPage() {
@@ -187,7 +239,7 @@ async function render() {
     mountVideo(config, user, fileUrl);
     return;
   }
-  const views = {dashboard, course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, account:accountPage};
+  const views = {dashboard, course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:wrongPage, review:reviewPage, account:accountPage};
   if (!views[page]) throw new Error("页面不存在");
   await views[page]();
 }

@@ -331,6 +331,106 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(store.data["submissions"][0]["score"], 88)
         self.assertEqual(LearningStore(path).data, store.data)
 
+    def test_12_wrong_questions_auto_archive_and_mastered(self):
+        course = self.json_request("/api/courses", {"title": "错题本测试课程", "description": "验证错题归档"})
+        cid = course["id"]
+        course = self.json_request(f"/api/courses/{cid}/questions", {"text": "Python 中变量用于？",
+                                                                     "options": ["保存数据", "删除文件", "打印输出"],
+                                                                     "answer": 0, "knowledge_point": "变量概念"})
+        qid = course["questions"][0]["id"]
+        self.assertEqual(course["questions"][0]["knowledge_point_id"],
+                         next(kp["id"] for kp in course["knowledge_points"] if kp["name"] == "变量概念"))
+        self.json_request(f"/api/courses/{cid}/resources", {"name": "课件", "kind": "课件"})
+        self.json_request(f"/api/courses/{cid}/publish", {})
+        self.assertEqual(self.json_request("/api/wrong-questions", account=DEMO_STUDENT), [])
+        result = self.json_request(f"/api/courses/{cid}/submissions", {"answers": {qid: 1}}, account=DEMO_STUDENT)
+        self.assertEqual(result["score"], 0)
+        wrong = self.json_request("/api/wrong-questions", account=DEMO_STUDENT)
+        self.assertEqual(len(wrong), 1)
+        self.assertEqual(wrong[0]["question_id"], qid)
+        self.assertEqual(wrong[0]["knowledge_point_name"], "变量概念")
+        self.assertEqual(wrong[0]["wrong_count"], 1)
+        self.assertEqual(wrong[0]["status"], "unresolved")
+        # 再次答错同一题：不新增记录，只累加次数
+        result = self.json_request(f"/api/courses/{cid}/submissions", {"answers": {qid: 2}}, account=DEMO_STUDENT)
+        wrong = self.json_request("/api/wrong-questions", account=DEMO_STUDENT)
+        self.assertEqual(len(wrong), 1)
+        self.assertEqual(wrong[0]["wrong_count"], 2)
+        # 标记已掌握
+        self.assertEqual(self.json_request(f"/api/wrong-questions/{wrong[0]['id']}/mastered", {}, account=DEMO_STUDENT)["status"], "mastered")
+        self.assertEqual(self.json_request("/api/wrong-questions", account=DEMO_STUDENT)[0]["status"], "mastered")
+        # 答对后不再归档
+        result = self.json_request(f"/api/courses/{cid}/submissions", {"answers": {qid: 0}}, account=DEMO_STUDENT)
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(len(self.json_request("/api/wrong-questions", account=DEMO_STUDENT)), 1)
+        # 教师无权访问错题本
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/wrong-questions", account=DEMO_TEACHER)
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_13_duplicate_submission_does_not_duplicate_record(self):
+        course = self.json_request("/api/courses", {"title": "防重复提交测试课程", "description": "验证同次重复点击"})
+        cid = course["id"]
+        course = self.json_request(f"/api/courses/{cid}/questions", {"text": "1+1=?", "options": ["1", "2"], "answer": 1})
+        qid = course["questions"][0]["id"]
+        self.json_request(f"/api/courses/{cid}/resources", {"name": "课件", "kind": "课件"})
+        self.json_request(f"/api/courses/{cid}/publish", {})
+        answers = {qid: 1}
+        first = self.json_request(f"/api/courses/{cid}/submissions", {"answers": answers}, account=DEMO_STUDENT)
+        # 同一答案 5 秒内再次提交：返回同一条记录，不新增
+        second = self.json_request(f"/api/courses/{cid}/submissions", {"answers": answers}, account=DEMO_STUDENT)
+        self.assertEqual(second["id"], first["id"])
+        records = self.json_request("/api/learning-records", account=DEMO_STUDENT)
+        self.assertEqual([r["id"] for r in records].count(first["id"]), 1)
+        # 不同答案视为新提交，5 秒内也应新增
+        third = self.json_request(f"/api/courses/{cid}/submissions", {"answers": {qid: 0}}, account=DEMO_STUDENT)
+        self.assertNotEqual(third["id"], first["id"])
+        records = self.json_request("/api/learning-records", account=DEMO_STUDENT)
+        self.assertIn(first["id"], [r["id"] for r in records])
+        self.assertIn(third["id"], [r["id"] for r in records])
+
+    def test_14_spaced_repetition_review_schedule(self):
+        course = self.json_request("/api/courses", {"title": "复习引擎测试课程", "description": "验证间隔重复调度"})
+        cid = course["id"]
+        course = self.json_request(f"/api/courses/{cid}/questions", {"text": "2+2=?", "options": ["3", "4", "5"],
+                                                                     "answer": 1, "knowledge_point": "算术"})
+        qid = course["questions"][0]["id"]
+        self.json_request(f"/api/courses/{cid}/resources", {"name": "课件", "kind": "课件"})
+        self.json_request(f"/api/courses/{cid}/publish", {})
+        # 首次答错归档：1 天后到期，进入复习队列（按课程过滤，避免其它测试课程残留数据干扰）
+        self.json_request(f"/api/courses/{cid}/submissions", {"answers": {qid: 0}}, account=DEMO_STUDENT)
+        due = [r for r in self.json_request("/api/review/due", account=DEMO_STUDENT) if r["course_id"] == cid]
+        self.assertEqual(len(due), 1)
+        record = due[0]
+        self.assertEqual(record["review_interval_days"], 1)
+        self.assertEqual(record["review_count"], 0)
+        self.assertEqual(record["knowledge_point_name"], "算术")
+        self.assertGreater(record["next_review_at"], LearningStore.now())
+        # 复习答对：间隔翻倍为 2 天，复习次数 +1
+        result = self.json_request(f"/api/wrong-questions/{record['id']}/review", {"selected": 1}, account=DEMO_STUDENT)
+        self.assertTrue(result["correct"])
+        self.assertEqual(result["review_interval_days"], 2)
+        self.assertEqual(result["review_count"], 1)
+        # 复习答错：间隔重置为 1 天，wrong_count 累加
+        result = self.json_request(f"/api/wrong-questions/{record['id']}/review", {"selected": 2}, account=DEMO_STUDENT)
+        self.assertFalse(result["correct"])
+        self.assertEqual(result["review_interval_days"], 1)
+        self.assertEqual(result["wrong_count"], 2)
+        # 连续答对至间隔 14 天自动视为掌握，移出复习队列
+        record = [r for r in self.json_request("/api/review/due", account=DEMO_STUDENT) if r["course_id"] == cid][0]
+        for _ in range(4):
+            record = self.json_request(f"/api/wrong-questions/{record['id']}/review", {"selected": 1}, account=DEMO_STUDENT)
+        self.assertEqual(record["review_interval_days"], 14)
+        self.assertEqual(record["status"], "mastered")
+        self.assertFalse(any(r["course_id"] == cid for r in self.json_request("/api/review/due", account=DEMO_STUDENT)))
+        # 无效选项校验与教师权限
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/wrong-questions/{record['id']}/review", {"selected": 9}, account=DEMO_STUDENT)
+        self.assertEqual(caught.exception.code, 400)
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/review/due", account=DEMO_TEACHER)
+        self.assertEqual(caught.exception.code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

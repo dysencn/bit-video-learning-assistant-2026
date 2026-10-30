@@ -20,11 +20,12 @@ from fastapi.responses import JSONResponse
 DEMO_TEACHER = "teacher-demo-1"
 DEMO_STUDENT = "student-demo-1"
 SESSION_SECONDS = 12 * 60 * 60
+# 演示账号按专业组归属：teacher1/student1 软件工程，teacher2/student2 人工智能（与预置课程同组，便于演示隔离）。
 DEMO_ACCOUNTS = [
-    {"id": DEMO_TEACHER, "username": "teacher1", "password": "Teach123!", "name": "王老师", "role": "teacher", "demo": True},
-    {"id": "teacher-demo-2", "username": "teacher2", "password": "Teach456!", "name": "李老师", "role": "teacher", "demo": True},
-    {"id": DEMO_STUDENT, "username": "student1", "password": "Learn123!", "name": "张同学", "role": "student", "demo": True},
-    {"id": "student-demo-2", "username": "student2", "password": "Learn456!", "name": "陈同学", "role": "student", "demo": True},
+    {"id": DEMO_TEACHER, "username": "teacher1", "password": "Teach123!", "name": "王老师", "role": "teacher", "demo": True, "major_id": "m-soft"},
+    {"id": "teacher-demo-2", "username": "teacher2", "password": "Teach456!", "name": "李老师", "role": "teacher", "demo": True, "major_id": "m-ai"},
+    {"id": DEMO_STUDENT, "username": "student1", "password": "Learn123!", "name": "张同学", "role": "student", "demo": True, "major_id": "m-soft"},
+    {"id": "student-demo-2", "username": "student2", "password": "Learn456!", "name": "陈同学", "role": "student", "demo": True, "major_id": "m-ai"},
 ]
 
 
@@ -36,6 +37,15 @@ class AccountStore:
         # Do not overwrite an unreadable account file with fresh demo accounts.
         if path.is_file():
             self.users = json.loads(path.read_text(encoding="utf-8"))["users"]
+            # 旧账号补专业组归属：演示账号按预置映射补，其他账号默认补软件工程组。
+            demo_major = {u["username"]: u["major_id"] for u in DEMO_ACCOUNTS}
+            migrated = False
+            for user in self.users:
+                if not user.get("major_id"):
+                    user["major_id"] = demo_major.get(user["username"], "m-soft")
+                    migrated = True
+            if migrated:
+                self.save()
         else:
             self.users = [dict(user) for user in DEMO_ACCOUNTS]
             self.save()
@@ -48,7 +58,7 @@ class AccountStore:
 
     @staticmethod
     def public(user):
-        return {key: user[key] for key in ("id", "username", "name", "role")}
+        return {key: user.get(key) for key in ("id", "username", "name", "role", "major_id")}
 
     def examples(self):
         with self.lock:
@@ -59,6 +69,7 @@ class AccountStore:
         name = payload.get("name", "")
         password = payload.get("password", "")
         role = payload.get("role")
+        major_id = payload.get("major_id", "")
         if not isinstance(username, str) or not re.fullmatch(r"[A-Za-z0-9_]{3,32}", username.strip()):
             raise HTTPException(400, "账号须为 3–32 位字母、数字或下划线")
         if not isinstance(name, str) or not 1 <= len(name.strip()) <= 30:
@@ -66,11 +77,13 @@ class AccountStore:
         self.validate_password(password)
         if not isinstance(role, str) or role not in {"teacher", "student"}:
             raise HTTPException(400, "请选择学生或教师身份")
+        if not isinstance(major_id, str) or not major_id.strip():
+            raise HTTPException(400, "请选择专业组")
         with self.lock:
             if any(u["username"].lower() == username.strip().lower() for u in self.users):
                 raise HTTPException(409, "该账号已注册，请使用其他账号或直接登录")
             user = {"id": uuid.uuid4().hex, "username": username.strip(), "name": name.strip(),
-                    "password": password, "role": role, "demo": False,
+                    "password": password, "role": role, "demo": False, "major_id": major_id.strip(),
                     "created_at": datetime.now(timezone.utc).isoformat()}
             self.users.append(user)
             self.save()

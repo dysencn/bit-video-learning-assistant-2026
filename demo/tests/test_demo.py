@@ -207,7 +207,7 @@ class DemoIntegrationTest(unittest.TestCase):
             restored.close()
 
     def test_07_register_login_validation_and_plaintext_persistence(self):
-        payload = {"username": "new_student", "password": "测试密码123", "name": "新同学", "role": "student"}
+        payload = {"username": "new_student", "password": "测试密码123", "name": "新同学", "role": "student", "major_id": "m-cs"}
         user = self.json_request("/api/auth/register", payload)
         self.assertNotIn("password", user)
         with self.assertRaises(HTTPError) as caught:
@@ -299,7 +299,7 @@ class DemoIntegrationTest(unittest.TestCase):
                 self.assertEqual(caught.exception.code, 404)
 
     def test_10_password_change_logout_and_multiple_accounts(self):
-        registered = self.json_request("/api/auth/register", {"username": "new_teacher", "password": "initial123", "name": "新教师", "role": "teacher"})
+        registered = self.json_request("/api/auth/register", {"username": "new_teacher", "password": "initial123", "name": "新教师", "role": "teacher", "major_id": "m-ai"})
         uid = registered["id"]
         self.json_request("/api/auth/login", {"username": "new_teacher", "password": "initial123"})
         with self.assertRaises(HTTPError) as caught:
@@ -430,6 +430,85 @@ class DemoIntegrationTest(unittest.TestCase):
         with self.assertRaises(HTTPError) as caught:
             self.json_request("/api/review/due", account=DEMO_TEACHER)
         self.assertEqual(caught.exception.code, 403)
+
+    def test_15_major_group_isolation(self):
+        # 预置三组：软件工程(m-soft)、人工智能(m-ai)、计算机科学(m-cs)
+        majors = self.json_request("/api/majors")
+        self.assertEqual([m["id"] for m in majors], ["m-soft", "m-ai", "m-cs"])
+        # student1(软件工程) 能看到预置课程 course-demo，student2(人工智能) 看不到
+        courses_s1 = self.json_request("/api/courses", account=DEMO_STUDENT)
+        self.assertIn("course-demo", [c["id"] for c in courses_s1])
+        courses_s2 = self.json_request("/api/courses", account="student-demo-2")
+        self.assertNotIn("course-demo", [c["id"] for c in courses_s2])
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/courses/course-demo", account="student-demo-2")
+        self.assertEqual(caught.exception.code, 404)
+        # 教师只能把课程建到自己专业组；teacher2(人工智能) 建软件工程组课程被拒
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/courses", {"title": "越组课程", "major_id": "m-soft"}, account="teacher-demo-2")
+        self.assertEqual(caught.exception.code, 400)
+        course = self.json_request("/api/courses", {"title": "人工智能导论", "description": "越组隔离验证"}, account="teacher-demo-2")
+        self.assertEqual(course["major_id"], "m-ai")
+        cid = course["id"]
+        # 发布前 student2 也看不到草稿；发布后同组学生可见、跨组学生仍不可见
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/courses/" + cid, account="student-demo-2")
+        self.assertEqual(caught.exception.code, 404)
+        self.json_request(f"/api/courses/{cid}/questions", {"text": "2*3=?", "options": ["5", "6"], "answer": 1}, account="teacher-demo-2")
+        self.json_request(f"/api/courses/{cid}/resources", {"name": "课件", "kind": "课件"}, account="teacher-demo-2")
+        self.json_request(f"/api/courses/{cid}/publish", {}, account="teacher-demo-2")
+        self.assertIn(cid, [c["id"] for c in self.json_request("/api/courses", account="student-demo-2")])
+        self.assertNotIn(cid, [c["id"] for c in self.json_request("/api/courses", account=DEMO_STUDENT)])
+        # 注册校验专业组
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/auth/register", {"username": "noregular", "name": "测试", "password": "pass123", "role": "student", "major_id": "m-unknown"})
+        self.assertEqual(caught.exception.code, 400)
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/auth/register", {"username": "noregular", "name": "测试", "password": "pass123", "role": "student"})
+        self.assertEqual(caught.exception.code, 400)
+
+    def test_16_course_chapters_and_per_chapter_practice(self):
+        # 预置课程已分章节：ch-1 变量与数据类型(q1/q2)，ch-2 输出与程序结构(q3)
+        course = self.json_request("/api/courses/course-demo", account=DEMO_STUDENT)
+        self.assertEqual(len(course["chapters"]), 2)
+        chapter_ids = [c["id"] for c in course["chapters"]]
+        self.assertEqual(course["chapters"][0]["title"], "变量与数据类型")
+        self.assertEqual([q["id"] for q in course["questions"] if q["chapter_id"] == "ch-1"], ["q1", "q2"])
+        self.assertEqual([q["id"] for q in course["questions"] if q["chapter_id"] == "ch-2"], ["q3"])
+        # 教师新增章节与重命名
+        chapter = self.json_request(f"/api/courses/course-demo/chapters", {"title": "第三章 综合练习"})
+        self.assertEqual(chapter["order"], 3)
+        renamed = self.json_request(f"/api/courses/course-demo/chapters/{chapter['id']}", {"title": "第三章 函数"})
+        self.assertEqual(renamed["title"], "第三章 函数")
+        # 新题挂到指定章节
+        course = self.json_request(f"/api/courses/course-demo/questions", {"text": "def 关键字的作用？", "options": ["定义函数", "删除", "导入"], "answer": 0, "chapter_id": chapter["id"]})
+        new_q = [q for q in course["questions"] if q["text"].startswith("def")][0]
+        self.assertEqual(new_q["chapter_id"], chapter["id"])
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/courses/course-demo/questions", {"text": "错误章节", "options": ["A", "B"], "answer": 0, "chapter_id": "no-such-chapter"})
+        self.assertEqual(caught.exception.code, 400)
+        # 按章节练习：只判该章题目
+        result = self.json_request(f"/api/courses/course-demo/submissions", {"chapter_id": "ch-1", "answers": {"q1": 0, "q2": 2}}, account=DEMO_STUDENT)
+        self.assertEqual(result["score"], 100)
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(result["chapter_id"], "ch-1")
+        # 按章节答错：错题归档并带章节快照
+        result = self.json_request(f"/api/courses/course-demo/submissions", {"chapter_id": "ch-1", "answers": {"q1": 1, "q2": 2}}, account=DEMO_STUDENT)
+        self.assertEqual(result["score"], 50)
+        wrong = [w for w in self.json_request("/api/wrong-questions", account=DEMO_STUDENT) if w["question_id"] == "q1"]
+        self.assertTrue(wrong)
+        self.assertEqual(wrong[-1]["chapter_title"], "变量与数据类型")
+        # 学习记录带章节名
+        records = self.json_request("/api/learning-records", account=DEMO_STUDENT)
+        chapter_record = [r for r in records if r["id"] == result["id"]]
+        self.assertEqual(chapter_record[0]["chapter_title"], "变量与数据类型")
+        # 无效章节与漏答校验
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/courses/course-demo/submissions", {"chapter_id": "ch-9", "answers": {"q1": 0}}, account=DEMO_STUDENT)
+        self.assertEqual(caught.exception.code, 400)
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/courses/course-demo/submissions", {"chapter_id": "ch-1", "answers": {"q1": 0}}, account=DEMO_STUDENT)
+        self.assertEqual(caught.exception.code, 400)
 
 
 if __name__ == "__main__":

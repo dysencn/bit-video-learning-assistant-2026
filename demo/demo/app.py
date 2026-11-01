@@ -546,6 +546,89 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 result.append({**r, "course_name": course.get("title", "已删除课程"), "chapter_title": chapter_title})
             return result
 
+    @app.get("/api/teacher/analytics")
+    async def teacher_analytics(request: Request):
+        """Small, explainable teacher dashboard built from persisted submissions.
+
+        This intentionally reports only evidence already collected by the demo:
+        scores, submissions and question-level correctness.  It does not invent
+        behavioural labels such as "diligent" without learning-duration data.
+        """
+        teacher = require_role(request, "teacher")
+        store = request.app.state.learning
+        with store.lock:
+            courses = [course for course in store.data["courses"] if course["teacher_id"] == teacher["id"]]
+            course_by_id = {course["id"]: course for course in courses}
+            submissions = [record for record in store.data["submissions"] if record["course_id"] in course_by_id]
+
+            course_stats = []
+            for course in courses:
+                items = [record for record in submissions if record["course_id"] == course["id"]]
+                participants = {record["student_id"] for record in items}
+                question_stats = []
+                for question in course.get("questions", []):
+                    answers = [detail for record in items for detail in record.get("details", [])
+                               if detail["question_id"] == question["id"]]
+                    if answers:
+                        correct = sum(1 for detail in answers if detail["correct"])
+                        question_stats.append({"question_id": question["id"], "text": question["text"],
+                                               "knowledge_point": next((kp["name"] for kp in course.get("knowledge_points", [])
+                                                                          if kp["id"] == question.get("knowledge_point_id")), "未分类"),
+                                               "answer_count": len(answers), "correct_rate": round(correct / len(answers) * 100)})
+                course_stats.append({"course_id": course["id"], "title": course["title"],
+                                     "status": course["status"], "participants": len(participants),
+                                     "submission_count": len(items),
+                                     "average_score": round(sum(item["score"] for item in items) / len(items)) if items else None,
+                                     "pass_rate": round(sum(item["score"] >= 60 for item in items) / len(items) * 100) if items else None,
+                                     "weak_questions": sorted(question_stats, key=lambda item: item["correct_rate"])[:3]})
+
+            student_accounts = request.app.state.accounts.students_in_major(teacher.get("major_id"))
+            profiles = []
+            available_course_count = max(1, sum(course["status"] == "published" for course in courses) or len(courses))
+            for student in student_accounts:
+                items = [record for record in submissions if record["student_id"] == student["id"]]
+                wrong_by_point: dict[str, int] = {}
+                correct_answers = total_answers = 0
+                for record in items:
+                    course = course_by_id[record["course_id"]]
+                    questions = {question["id"]: question for question in course.get("questions", [])}
+                    points = {point["id"]: point["name"] for point in course.get("knowledge_points", [])}
+                    for detail in record.get("details", []):
+                        total_answers += 1
+                        correct_answers += int(detail["correct"])
+                        if not detail["correct"]:
+                            point = points.get(questions.get(detail["question_id"], {}).get("knowledge_point_id"), "未分类")
+                            wrong_by_point[point] = wrong_by_point.get(point, 0) + 1
+                average = round(sum(item["score"] for item in items) / len(items)) if items else None
+                latest = max((item["submitted_at"] for item in items), default=None)
+                studied_courses = len({item["course_id"] for item in items})
+                profiles.append({"student_id": student["id"], "student": student["name"],
+                                 "submission_count": len(items), "course_count": studied_courses,
+                                 "average_score": average, "latest_submitted_at": latest,
+                                 "weak_points": [name for name, _ in sorted(wrong_by_point.items(), key=lambda item: item[1], reverse=True)[:2]],
+                                 "course_participation": round(studied_courses / available_course_count * 100),
+                                 "mastery_score": round(correct_answers / total_answers * 100) if total_answers else 0,
+                                 "needs_attention": bool(items) and average is not None and average < 60,
+                                 "not_started": not items})
+
+            max_submissions = max((profile["submission_count"] for profile in profiles), default=1)
+            for profile in profiles:
+                profile["practice_activity"] = round(profile["submission_count"] / max_submissions * 100) if profile["submission_count"] else 0
+
+            scores = [item["score"] for item in submissions]
+            latest = max((item["submitted_at"] for item in submissions), default=None)
+            return {"overview": {"course_count": len(courses),
+                                  "published_count": sum(course["status"] == "published" for course in courses),
+                                  "student_count": len(student_accounts),
+                                  "participant_count": len({item["student_id"] for item in submissions}),
+                                  "submission_count": len(submissions),
+                                  "average_score": round(sum(scores) / len(scores)) if scores else None,
+                                  "pass_rate": round(sum(score >= 60 for score in scores) / len(scores) * 100) if scores else None,
+                                  "latest_submitted_at": latest,
+                                  "attention_count": sum(profile["needs_attention"] or profile["not_started"] for profile in profiles)},
+                    "courses": course_stats,
+                    "students": sorted(profiles, key=lambda profile: (not profile["not_started"], not profile["needs_attention"], profile["average_score"] or 101))}
+
     @app.get("/api/wrong-questions")
     async def wrong_questions(request: Request):
         user = require_role(request, "student")

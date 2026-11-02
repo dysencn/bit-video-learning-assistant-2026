@@ -65,6 +65,12 @@ class AccountStore:
         with self.lock:
             return [{**self.public(user), "password": user["password"]} for user in self.users if user.get("demo")]
 
+    def students_in_major(self, major_id: str) -> list[dict]:
+        """Return safe student account summaries for a teacher's major group."""
+        with self.lock:
+            return [self.public(user) for user in self.users
+                    if user["role"] == "student" and user.get("major_id") == major_id]
+
     def register(self, payload):
         username = payload.get("username", "")
         name = payload.get("name", "")

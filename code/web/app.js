@@ -196,15 +196,43 @@ async function editCoursePage() {
 }
 
 async function recordsPage() {
+  if (user.role === "teacher") return teacherAnalyticsPage();
   const [logs, courses] = await Promise.all([api("/api/learning-records"), api("/api/courses")]);
-  const teacher = user.role === "teacher";
   const summaries = courses.map(c => {
     const items = logs.filter(r => r.course_id === c.id);
-    const participants = new Set(items.map(r => r.student_id)).size;
-    return `<div class="record-row"><div><b>${esc(c.title)}</b><small>${teacher ? `${participants} 人提交 · ${items.length} 次练习` : (items.length ? `已完成 ${items.length} 次练习 · 最近 ${date(items[0].submitted_at)}` : "待完成练习")}</small></div><strong class="score">${items.length ? `${Math.max(...items.map(r => r.score))} 分` : "—"}<small>最高分</small></strong></div>`;
+    return `<div class="record-row"><div><b>${esc(c.title)}</b><small>${items.length ? `已完成 ${items.length} 次练习 · 最近 ${date(items[0].submitted_at)}` : "待完成练习"}</small></div><strong class="score">${items.length ? `${Math.max(...items.map(r => r.score))} 分` : "—"}<small>最高分</small></strong></div>`;
   }).join("");
-  layout(`<div class="section-title"><div><span class="eyebrow">LEARNING PROGRESS</span><h1>${teacher ? "学生学习情况" : "我的学习进度"}</h1><p class="muted">${teacher ? "查看自己课程的学生提交与成绩。" : "按课程查看练习完成情况，回顾每一次反馈。"}</p></div><button class="ghost" id="refresh">刷新记录</button></div><section><h2>课程进度</h2><div class="record-list">${summaries || '<div class="empty">暂无课程。</div>'}</div></section><section><h2>练习提交记录</h2>${recordList(logs, teacher)}</section>`, teacher ? "学生学习情况" : "学习进度");
+  layout(`<div class="section-title"><div><span class="eyebrow">LEARNING PROGRESS</span><h1>我的学习进度</h1><p class="muted">按课程查看练习完成情况，回顾每一次反馈。</p></div><button class="ghost" id="refresh">刷新记录</button></div><section><h2>课程进度</h2><div class="record-list">${summaries || '<div class="empty">暂无课程。</div>'}</div></section><section><h2>练习提交记录</h2>${recordList(logs, false)}</section>`, "学习进度");
   root.querySelector("#refresh").onclick = () => recordsPage().catch(e => tell(e.message));
+}
+
+async function teacherAnalyticsPage() {
+  const [data, logs] = await Promise.all([api("/api/teacher/analytics"), api("/api/learning-records")]);
+  const overview = data.overview;
+  const value = item => item === null || item === undefined ? "—" : item;
+  const cards = [
+    [value(overview.student_count), "本专业学生"], [value(overview.participant_count), "已有提交学生"],
+    [value(overview.average_score), "平均分"], [overview.pass_rate === null ? "—" : `${overview.pass_rate}%`, "及格率"],
+    [value(overview.attention_count), "需要关注"], [value(overview.submission_count), "练习提交次数"],
+  ].map(([number, label]) => `<div class="analytics-card"><b>${number}</b><span>${label}</span></div>`).join("");
+  const courseRows = data.courses.map(course => `<div class="analysis-card"><div class="analysis-head"><div><h3>${esc(course.title)}</h3><small>${course.participants} 人参与 · ${course.submission_count} 次提交</small></div><strong>${value(course.average_score)}<small>平均分</small></strong></div><p class="muted">及格率：${course.pass_rate === null ? "暂无数据" : `${course.pass_rate}%`}</p>${course.weak_questions.length ? `<div class="weak-list"><b>需重点讲解</b>${course.weak_questions.map(question => `<span>${esc(question.knowledge_point)} · 正确率 ${question.correct_rate}%：${esc(question.text)}</span>`).join("")}</div>` : '<p class="muted">尚无题目作答数据。</p>'}</div>`).join("") || '<div class="record-list empty">暂无课程。</div>';
+  const studentRows = data.students.map(student => `<div class="record-row"><div><b>${esc(student.student)}</b><small>${student.not_started ? "尚未提交练习" : `参与 ${student.course_count} 门课程 · ${student.submission_count} 次提交${student.latest_submitted_at ? ` · 最近 ${date(student.latest_submitted_at)}` : ""}`}${student.weak_points.length ? ` · 薄弱点：${esc(student.weak_points.join("、"))}` : ""}</small></div><div class="profile-status">${student.not_started ? '<span class="tag attention">待开始</span>' : student.needs_attention ? '<span class="tag attention">需关注</span>' : '<span class="tag published">正常</span>'}<strong class="score">${value(student.average_score)}<small>平均分</small></strong><button class="ghost profile-btn" data-student="${esc(student.student_id)}">查看雷达图</button></div></div>`).join("") || '<div class="record-list empty">本专业暂无学生账号。</div>';
+  layout(`<div class="section-title"><div><span class="eyebrow">LEARNING ANALYTICS</span><h1>学生学习情况</h1><p class="muted">统计仅基于本教师课程内已提交的练习，平均分和及格率按提交次数计算（章节练习也计一次）；“需关注”表示平均分低于 60 分，“待开始”表示尚无提交记录。</p></div><button class="ghost" id="refresh">刷新分析</button></div><section><div class="analytics-grid">${cards}</div><p class="muted analytics-time">${overview.latest_submitted_at ? `最近一次提交：${date(overview.latest_submitted_at)}` : "暂时没有学生提交记录。"}</p></section><section><div class="section-title"><div><span class="eyebrow">COURSE INSIGHT</span><h2>课程成绩分析</h2></div></div><div class="analysis-grid">${courseRows}</div></section><section><div class="section-title"><div><span class="eyebrow">STUDENT PROFILE</span><h2>学生基础画像</h2></div></div><div class="record-list">${studentRows}</div><div id="profile-detail"></div></section><section><h2>练习提交记录</h2>${recordList(logs, true)}</section>`, "学生学习情况");
+  const renderProfile = student => {
+    if (!student) return;
+    const dimensions = [["课程参与", student.course_participation], ["练习积极", student.practice_activity], ["平均成绩", student.average_score || 0], ["答题掌握", student.mastery_score]];
+    const cx = 125, cy = 120, radius = 76;
+    const pointValues = (index, value) => { const angle = -Math.PI / 2 + Math.PI / 2 * index; const length = radius * value / 100; return {x: (cx + Math.cos(angle) * length).toFixed(1), y: (cy + Math.sin(angle) * length).toFixed(1)}; };
+    const point = (index, value) => { const p = pointValues(index, value); return `${p.x},${p.y}`; };
+    const polygon = dimensions.map(([, score], index) => point(index, score)).join(" ");
+    const rings = [25, 50, 75, 100].map(level => `<polygon class="radar-ring" points="${dimensions.map((_, index) => point(index, level)).join(" ")}"/>`).join("");
+    const labels = dimensions.map(([name, score], index) => { const angle = -Math.PI / 2 + Math.PI / 2 * index; return `<text x="${cx + Math.cos(angle) * 103}" y="${cy + Math.sin(angle) * 103 + 4}" text-anchor="middle">${esc(name)} ${Math.round(score)}</text>`; }).join("");
+    root.querySelector("#profile-detail").innerHTML = `<div class="radar-card"><div><span class="eyebrow">PERSONAL LEARNING PROFILE</span><h3>${esc(student.student)} 的学习雷达图</h3><p class="muted">课程参与 = 已提交课程 / 本教师已发布课程；练习积极 = 与本教师课程内同专业学生的最高提交次数相比；其余指标来自已答题目。</p><div class="radar-legend">${dimensions.map(([name, score]) => `<span><b>${Math.round(score)}</b>${name}</span>`).join("")}</div>${student.weak_points.length ? `<p class="radar-weak">建议优先复习：${esc(student.weak_points.join("、"))}</p>` : ""}</div><svg class="radar" viewBox="0 0 250 240" role="img" aria-label="${esc(student.student)}的学习雷达图">${rings}${dimensions.map((_, index) => { const p = pointValues(index, 100); return `<line x1="${cx}" y1="${cy}" x2="${p.x}" y2="${p.y}"/>`; }).join("")}<polygon class="radar-area" points="${polygon}"/>${labels}</svg></div>`;
+    root.querySelector("#profile-detail").scrollIntoView({behavior:"smooth", block:"nearest"});
+  };
+  root.querySelectorAll(".profile-btn").forEach(button => button.onclick = () => renderProfile(data.students.find(student => student.student_id === button.dataset.student)));
+  renderProfile(data.students[0]);
+  root.querySelector("#refresh").onclick = () => teacherAnalyticsPage().catch(error => tell(error.message));
 }
 
 async function wrongPage() {

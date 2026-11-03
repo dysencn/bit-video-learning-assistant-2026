@@ -64,10 +64,12 @@ async function loginPage(message = "") {
   const [examples, majors] = await Promise.all([api("/api/auth/demo-accounts"), api("/api/majors")]);
   const majorName = id => majors.find(m => m.id === id)?.name || "未分组";
   layout(`<div class="auth-intro"><span class="eyebrow">LEARN · PRACTICE · GROW</span><h1>让每一次学习，都有迹可循。</h1><p class="muted">发布资源与练习，获得反馈，让教师与学生看见学习进展。</p></div>
-    ${message ? `<p class="warning">${esc(message)}</p>` : ""}
+    ${message ? `<p id="login-message" class="warning">${esc(message)}</p>` : ""}
     <div class="auth-grid"><div class="form-card"><div class="auth-tabs" role="group" aria-label="登录或注册"><button id="login-tab" class="primary">账号登录</button><button id="register-tab" class="ghost">注册账号</button></div><div id="auth-form"></div></div>
     <section class="demo-panel"><span class="eyebrow">QUICK START</span><h2>演示账号</h2><p class="muted">点击“填入账号”，再点击登录。可分别打开教师与学生工作台。</p><div class="table-scroll"><table><thead><tr><th>身份</th><th>专业组</th><th>账号</th><th>密码</th><th>操作</th></tr></thead><tbody>${examples.map((u, i) => `<tr><td>${esc(u.name)}<small>${roleName(u.role)}</small></td><td><span class="tag">${esc(majorName(u.major_id))}</span></td><td><code>${esc(u.username)}</code></td><td><code>${esc(u.password)}</code></td><td><button class="secondary fill-account" data-index="${i}">填入账号</button></td></tr>`).join("")}</tbody></table></div><p class="muted demo-note">这是课堂演示环境，请使用演示专用密码。</p></section></div>`, "登录与注册");
   function showForm(register = false) {
+    root.querySelector(".auth-tabs").hidden = false;
+    root.querySelectorAll(".fill-account").forEach(button => { button.disabled = false; });
     root.querySelector("#login-tab").className = register ? "ghost" : "primary";
     root.querySelector("#register-tab").className = register ? "primary" : "ghost";
     root.querySelector("#auth-form").innerHTML = `<form id="auth"><h2>${register ? "创建你的账号" : "欢迎回来"}</h2>
@@ -75,7 +77,7 @@ async function loginPage(message = "") {
       <label>账号<input name="username" autocomplete="username" placeholder="字母、数字或下划线" minlength="3" maxlength="32" pattern="[A-Za-z0-9_]{3,32}" required></label>
       <label>密码<input name="password" type="password" autocomplete="${register ? "new-password" : "current-password"}" minlength="6" maxlength="128" required></label>
       ${register ? '<label>确认密码<input name="confirm" type="password" autocomplete="new-password" minlength="6" maxlength="128" required></label>' : ""}
-      <div class="actions"><button class="primary" type="submit">${register ? "注册账号" : "登录"}</button></div><div id="auth-success" role="status"></div></form>`;
+      <div class="actions"><button class="primary" type="submit">${register ? "注册账号" : "登录"}</button></div></form>`;
     bindForm("#auth", async (data, form) => {
       if (register) {
         if (data.password !== data.confirm) throw new Error("两次输入的密码不一致");
@@ -86,7 +88,17 @@ async function loginPage(message = "") {
       account = authenticated.id;
       const destination = href("dashboard");
       // Use an explicit link after asynchronous login so popup blockers cannot swallow the tab.
-      root.querySelector("#auth-success").innerHTML = `<div class="result"><b>${register ? "注册成功" : "登录成功"}，${esc(authenticated.name)}</b><p>打开工作台后，此页可以继续登录其他演示账号。</p><a id="enter-workspace" class="primary" href="${esc(destination)}" target="_blank" rel="noopener">进入${roleName(authenticated.role)}工作台 ↗</a></div>`;
+      root.querySelector(".auth-tabs").hidden = true;
+      if (root.querySelector("#login-message")) root.querySelector("#login-message").hidden = true;
+      root.querySelector(".notice").hidden = true;
+      root.querySelectorAll(".fill-account").forEach(button => { button.disabled = true; });
+      root.querySelector("#auth-form").innerHTML = `<div id="auth-success"><p role="status">${register ? "注册成功" : "登录成功"}，${esc(authenticated.name)}</p><div class="actions"><a id="enter-workspace" class="primary" href="${esc(destination)}" target="_blank" rel="noopener">进入工作台 ↗</a><button id="login-another" class="secondary" type="button">登录其它账号</button></div></div>`;
+      root.querySelector("#login-another").onclick = () => {
+        account = "";
+        showForm(false);
+        root.querySelector('[name="username"]').focus();
+      };
+      root.querySelector("#enter-workspace").focus();
     });
   }
   root.querySelector("#login-tab").onclick = () => showForm(false);

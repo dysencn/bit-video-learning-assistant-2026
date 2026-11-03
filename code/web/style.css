@@ -56,7 +56,7 @@ body:has(#platform)>header,body:has(#platform)>main{display:none}#platform{min-h
 #platform .summary-panel h3{margin:6px 0 10px}
 #platform .summary-note,#summary-detail{font-size:12px;color:#657c73;line-height:1.7}
 .summary-actions{display:flex;gap:10px;flex-wrap:wrap;margin:16px 0}
-.summary-actions .button{width:auto;text-decoration:none;margin:0}
+#platform .summary-actions .button{width:auto;display:inline-flex;align-items:center;justify-content:center;margin:0;padding:9px 15px;border:0;border-radius:8px;font-family:inherit;font-size:13px;font-weight:700;line-height:1.6;text-decoration:none;text-align:center}
 #summary-status{padding:14px;background:#eef5ef;border-radius:10px}
 #summary-message{font-size:13px;overflow-wrap:anywhere}
 #summary-progress{display:block;width:100%;height:10px;margin:12px 0;accent-color:#16715d}

@@ -1,5 +1,6 @@
 import { mountVideo } from "/static/video.js";
 import { initializeApiKey } from "/static/ai-key.js";
+import { initializeXfyunCredentials } from "/static/xfyun-key.js";
 
 const root = document.getElementById("platform");
 const params = new URLSearchParams(location.search);
@@ -317,6 +318,7 @@ async function render() {
     root.querySelector(".shell").remove();
     root.append(document.getElementById("video-template").content.cloneNode(true));
     mountVideo(config, user, fileUrl);
+    initializeXfyunCredentials(config, user);
     initializeApiKey(config, user).catch(error => tell(error.message));
     return;
   }

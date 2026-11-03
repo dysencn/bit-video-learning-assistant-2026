@@ -35,6 +35,7 @@ class AccountStore:
         self.lock = threading.RLock()
         self.sessions: dict[str, tuple[str, float]] = {}
         self.api_keys: dict[str, str] = {}  # In-memory only; scoped to a validated login session.
+        self.xfyun_keys: dict[str, tuple[str, str, str]] = {}
         # Do not overwrite an unreadable account file with fresh demo accounts.
         if path.is_file():
             self.users = json.loads(path.read_text(encoding="utf-8"))["users"]
@@ -115,6 +116,7 @@ class AccountStore:
         now = time.time()
         self.sessions = {token: value for token, value in self.sessions.items() if value[1] > now}
         self.api_keys = {token: key for token, key in self.api_keys.items() if token in self.sessions}
+        self.xfyun_keys = {token: value for token, value in self.xfyun_keys.items() if token in self.sessions}
         token = secrets.token_urlsafe(32)
         self.sessions[token] = (user["id"], now + SESSION_SECONDS)
         response = JSONResponse(self.public(user))
@@ -142,6 +144,7 @@ class AccountStore:
             token = request.cookies.get(key, "")
             self.sessions.pop(token, None)
             self.api_keys.pop(token, None)
+            self.xfyun_keys.pop(token, None)
         response = JSONResponse({"message": "已退出登录"})
         response.delete_cookie(key, path="/", httponly=True, samesite="strict")
         return response
@@ -155,6 +158,19 @@ class AccountStore:
                     raise HTTPException(400, "请输入有效的 API 密钥，不要包含空格或换行")
                 self.api_keys[token] = value.strip()
             return self.api_keys.get(token)
+
+    def xfyun_credentials(self, request, value=None):
+        user = self.current(request)
+        token = request.cookies[f"learning_session_{user['id']}"]
+        with self.lock:
+            if value is not None:
+                fields = (value.get("app_id"), value.get("api_key"), value.get("api_secret")) if isinstance(value, dict) else ()
+                if len(fields) != 3 or any(not isinstance(field, str) or not field.strip()
+                                           or len(field.strip()) > 512 or any(not 33 <= ord(char) <= 126 for char in field.strip())
+                                           for field in fields):
+                    raise HTTPException(400, "请完整输入讯飞 APPID、APIKey 和 APISecret，不要包含空格或换行")
+                self.xfyun_keys[token] = tuple(field.strip() for field in fields)
+            return self.xfyun_keys.get(token)
 
     def change_password(self, request, payload):
         current = self.current(request)

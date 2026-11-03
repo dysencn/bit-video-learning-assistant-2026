@@ -22,6 +22,9 @@ from demo.summaries import SummaryManager, SummaryError, read_api_key, call_deep
 FIXTURE = '<!DOCTYPE html><html><head><title>TEST FIXTURE</title><style>body{color:black}</style></head><body><h1>TEST ONLY</h1><img src="slides/slide-0001.jpg"><details><summary>Test</summary>Fixture</details></body></html>'
 PAGES = [{"number": 1, "timestamp": 1.2, "filename": "slide-0001.jpg"}]
 REPLY = {"choices": [{"finish_reason": "stop", "message": {"content": FIXTURE}}], "usage": {"total_tokens": 12}}
+TEXT_FIXTURE = FIXTURE.replace('<img src="slides/slide-0001.jpg">', '')
+TEXT_REPLY = {"choices": [{"finish_reason": "stop", "message": {"content": TEXT_FIXTURE}}]}
+TRANSCRIPT = "TRANSCRIPT_TEST_ONLY_讲解中的独有例子。\n第二段转写文字。"
 
 
 class SummaryUnitTests(unittest.TestCase):
@@ -306,6 +309,131 @@ class SummaryHTTPTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(HTTPError) as caught:
                 self.request("/api/ai/key", {"api_key": value})
             self.assertEqual(caught.exception.code, 400)
+
+    def add_transcript(self):
+        (self.folder / "transcript.txt").write_text(TRANSCRIPT, encoding="utf-8-sig")
+        self.app.state.jobs.update(self.job_id, transcription={"status": "completed", "available": True})
+
+    def test_three_modes_send_only_selected_material_and_distinct_prompts(self):
+        self.add_transcript()
+        prompts = []
+        for mode in ("slides", "transcript", "combined"):
+            with self.subTest(mode=mode), patch("demo.summaries.read_api_key", return_value="fixture"), patch("demo.summaries.call_deepseek", return_value=TEXT_REPLY if mode == "transcript" else REPLY) as call:
+                self.request(self.prefix + "/summary", {"mode": mode, "regenerate": True})
+                state = self.wait_summary()
+                self.assertEqual(state["status"], "completed")
+                self.assertEqual(state["available_mode"], mode)
+                payload = json.loads(call.call_args.args[0])
+                content = payload["messages"][0]["content"]
+                images = [item for item in content if item["type"] == "image_url"]
+                text = "\n".join(item["text"] for item in content if item["type"] == "text")
+                self.assertEqual(len(images), 0 if mode == "transcript" else 1)
+                self.assertEqual("TRANSCRIPT_TEST_ONLY" in text, mode != "slides")
+                self.assertEqual(state["image_count"], len(images))
+                if mode == "transcript":
+                    self.assertNotIn("slide-0001.jpg", json.dumps(payload))
+                    self.assertIn("文字稿第1段", text)
+                    self.assertNotIn("data:image", self.request(self.prefix + "/summary/download")[0])
+                prompts.append(content[0]["text"])
+        self.assertEqual(len(set(prompts)), 3)
+
+    def test_modes_cannot_bypass_required_preprocessing_and_transcription(self):
+        with patch("demo.summaries.call_deepseek") as call:
+            for mode in ("transcript", "combined"):
+                with self.assertRaises(HTTPError) as caught:
+                    self.request(self.prefix + "/summary", {"mode": mode})
+                self.assertEqual(caught.exception.code, 409)
+                self.assertIn("转文字", caught.exception.read().decode())
+            self.add_transcript()
+            self.app.state.jobs.update(self.job_id, status="running")
+            for mode in ("slides", "transcript", "combined"):
+                with self.assertRaises(HTTPError) as caught:
+                    self.request(self.prefix + "/summary", {"mode": mode})
+                self.assertEqual(caught.exception.code, 409)
+            call.assert_not_called()
+
+    def test_options_follow_real_files_and_live_transcription_status(self):
+        options = self.request(self.prefix)["summary_options"]
+        self.assertTrue(options["slides"]["ready"])
+        self.assertFalse(options["combined"]["ready"])
+        self.app.state.jobs.update(self.job_id, transcription={"status": "recognizing"})
+        self.assertIn("等待", self.request(self.prefix)["summary_options"]["transcript"]["reason"])
+        self.add_transcript()
+        self.assertTrue(all(option["ready"] for option in self.request(self.prefix)["summary_options"].values()))
+        (self.folder / "slides/slide-0001.jpg").unlink()
+        options = self.request(self.prefix)["summary_options"]
+        self.assertTrue(options["transcript"]["ready"])
+        self.assertFalse(options["slides"]["ready"])
+        self.assertFalse(options["combined"]["ready"])
+        (self.folder / "transcript.txt").unlink()
+        self.assertFalse(self.request(self.prefix)["summary_options"]["transcript"]["ready"])
+
+    def test_text_only_works_without_slides_and_disallows_fabricated_images(self):
+        self.add_transcript()
+        (self.folder / "slides/slide-0001.jpg").unlink()
+        self.app.state.jobs.update(self.job_id, result={"pages": []})
+        with patch("demo.summaries.read_api_key", return_value="fixture"), patch("demo.summaries.call_deepseek", return_value=REPLY):
+            self.request(self.prefix + "/summary", {"mode": "transcript"})
+            self.assertEqual(self.wait_summary()["status"], "failed")
+        with patch("demo.summaries.read_api_key", return_value="fixture"), patch("demo.summaries.call_deepseek", return_value=TEXT_REPLY):
+            self.request(self.prefix + "/summary", {"mode": "transcript"})
+            self.assertEqual(self.wait_summary()["status"], "completed")
+        self.assertIn("仅演讲文字", self.request(self.prefix + "/summary/view")[0])
+        self.assertEqual(self.request(self.prefix + "/summary/download")[0], TEXT_FIXTURE)
+
+    def test_slides_only_never_reads_invalid_or_oversized_transcript(self):
+        self.add_transcript()
+        (self.folder / "transcript.txt").write_bytes(b"\xff" * (1024**2 + 1))
+        with patch("demo.summaries.read_api_key", return_value="fixture"), patch("demo.summaries.call_deepseek", return_value=REPLY) as call:
+            self.request(self.prefix + "/summary", {"mode": "slides"})
+            self.assertEqual(self.wait_summary()["status"], "completed")
+            call.assert_called_once()
+
+    def test_empty_or_oversized_text_is_not_sent_to_deepseek(self):
+        self.add_transcript()
+        for body in ("  \n   ", "文" * (1024**2)):
+            (self.folder / "transcript.txt").write_text(body, encoding="utf-8")
+            with patch("demo.summaries.read_api_key", return_value="fixture"), patch("demo.summaries.call_deepseek") as call:
+                self.request(self.prefix + "/summary", {"mode": "transcript"})
+                self.assertEqual(self.wait_summary()["status"], "failed")
+                call.assert_not_called()
+
+    def test_switch_mode_requires_confirmation_and_failed_replacement_keeps_source(self):
+        self.seed_summary()
+        self.add_transcript()
+        with self.assertRaises(HTTPError) as caught:
+            self.request(self.prefix + "/summary", {"mode": "transcript"})
+        self.assertEqual(caught.exception.code, 409)
+        with patch("demo.summaries.read_api_key", return_value="fixture"), patch("demo.summaries.call_deepseek", side_effect=SummaryError("network fixture")):
+            self.request(self.prefix + "/summary", {"mode": "transcript", "regenerate": True})
+            state = self.wait_summary()
+            self.assertEqual(state["status"], "failed")
+            self.assertEqual(state["mode"], "transcript")
+            self.assertEqual(state["available_mode"], "slides")
+        self.assertIn("data:image/jpeg;base64,", self.request(self.prefix + "/summary/download")[0])
+        self.assertIn("来源：仅 PPT", self.request(self.prefix + "/summary/view")[0])
+
+    def test_invalid_modes_and_conflicting_active_mode_do_not_start_another_request(self):
+        for mode in (None, "audio", {}, [], True):
+            with self.subTest(mode=mode), self.assertRaises(HTTPError) as caught:
+                self.request(self.prefix + "/summary", {"mode": mode})
+            self.assertEqual(caught.exception.code, 400)
+        self.add_transcript()
+        entered, release = threading.Event(), threading.Event()
+        def reply(*args):
+            entered.set(); release.wait(5); return REPLY
+        with patch("demo.summaries.read_api_key", return_value="fixture"), patch("demo.summaries.call_deepseek", side_effect=reply) as call:
+            self.request(self.prefix + "/summary", {"mode": "combined"})
+            self.assertTrue(entered.wait(3))
+            try:
+                self.request(self.prefix + "/summary", {"mode": "combined"})
+                with self.assertRaises(HTTPError) as caught:
+                    self.request(self.prefix + "/summary", {"mode": "slides"})
+                self.assertEqual(caught.exception.code, 409)
+            finally:
+                release.set()
+            self.assertEqual(self.wait_summary()["status"], "completed")
+            call.assert_called_once()
 
 
 if __name__ == "__main__":

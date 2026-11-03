@@ -10,7 +10,7 @@
   <div id="platform"></div>
   <template id="video-template">
   <main>
-    <section class="intro"><div class="eyebrow">VIDEO → LEARNING MATERIALS</div><h1>把一段课程，<br>变成随时翻阅的资料。</h1><p>选择课程视频，自动整理课件页面与音频。<br class="mobile-break">提取后可用 DeepSeek 生成课程总结。</p><div class="intro-tags"><span>本地提取</span><span>视频留在本机</span><span>可选 AI 总结</span></div></section>
+    <section class="intro"><div class="eyebrow">VIDEO → LEARNING MATERIALS</div><h1>把一段课程，<br>变成随时翻阅的资料。</h1><p>选择课程视频，自动整理课件页面与音频。<br class="mobile-break">提取后可生成课程总结，或将录音转为文字。</p><div class="intro-tags"><span>本地提取</span><span>可选 AI 总结</span><span>录音转文字</span></div></section>
     <section class="workspace">
       <div class="panel upload-panel">
         <div class="section-heading"><span class="step-number">01</span><div><h2>选择课程视频</h2><p>适合课件为主、画面相对稳定的课程录屏</p></div></div>
@@ -23,16 +23,45 @@
         </label>
         <div class="settings"><label for="profile">页面提取模式</label><select id="profile"><option value="balanced">均衡 · 推荐用于普通课程</option><option value="detailed">细致 · 保留更多局部内容变化</option><option value="compact">精简 · 减少相似页面</option></select><p id="profile-help">每秒检查 5 帧，等待画面稳定后保留页面，并去除重复内容。</p></div>
         <button class="button primary" id="start" disabled>确认视频并开始整理 <span>→</span></button>
-        <p class="local-note">视频仅传入本机服务；点击“生成课程总结”后，才会将课件截图发送给 DeepSeek。</p>
+        <p class="local-note">视频在本机提取。生成总结会将截图发送给 DeepSeek；录音转文字会将音频发送给讯飞。</p>
       </div>
       <div class="panel status-panel">
         <div class="section-heading"><span class="step-number">02</span><div><h2>整理与导出</h2><p>从视频到可保存的学习资料</p></div></div>
         <div id="idle" class="idle-state"><div class="page-stack"><span></span><span></span><span>PDF<br><small>课程资料</small></span></div><h3>等你放入第一段视频</h3><p>提取清晰页面，按出现顺序合成 PDF，<br>再将音频单独保存为 MP3。</p></div>
         <div id="processing" hidden aria-live="polite"><div class="processing-top"><span id="state-label">正在处理</span><strong id="percent">0%</strong></div><progress id="progress" max="100" value="0"></progress><p id="message">准备开始</p><ol class="stage-list"><li data-stage="uploading">视频传入本机</li><li data-stage="scanning">识别稳定画面</li><li data-stage="extracting">导出 JPG 与 PDF</li><li data-stage="audio">单独提取音频</li></ol><button class="button secondary" id="cancel">取消当前任务</button></div>
-        <div id="result" hidden aria-live="polite"><div class="success-icon">✓</div><h3>学习资料已就绪</h3><p id="result-meta"></p><div id="warnings"></div><div class="download-list"><a class="download-link primary-download" id="pdf-download" href="#" download><span><b>课件 PDF</b><small>按原画面比例，一页一张</small></span><span>保存 ↓</span></a><a class="download-link" id="audio-download" href="#" download><span><b>课程音频 MP3</b><small>可独立播放，方便回听</small></span><span>保存 ↓</span></a><a class="download-link" id="zip-download" href="#" download><span><b>全部课件 JPG</b><small>图片压缩包，保留清晰原图</small></span><span>保存 ↓</span></a></div><p class="save-note">保存位置由浏览器决定；可在浏览器下载设置中开启“每次询问保存位置”。</p></div>
-        <section id="summary-section" class="summary-panel" hidden aria-labelledby="summary-title">
-          <span class="eyebrow">DEEPSEEK · 课程复习</span><h3 id="summary-title">把课件整理成一份总结</h3>
-          <p class="summary-note">发送本任务的课件截图给 DeepSeek，生成含知识点、来源截图和自测题的网页。仅分析画面，不分析音频；调用会使用你的 API 额度。</p>
+        <div id="result" hidden aria-live="polite">
+          <div class="success-icon">✓</div><h3>学习资料已就绪</h3><p id="result-meta"></p><div id="warnings"></div>
+          <div class="download-list">
+            <div class="download-link primary-download pdf-card" role="group" aria-label="课件 PDF">
+              <span><b>课件 PDF</b><small>按原画面比例，一页一张</small></span>
+              <div class="pdf-actions">
+                <a class="pdf-action" id="pdf-view" href="#" target="_blank" rel="noopener" aria-label="查看课件 PDF（新标签页）">查看 ↗</a>
+                <a class="pdf-action" id="pdf-download" href="#" download aria-label="保存课件 PDF">保存 ↓</a>
+              </div>
+            </div>
+            <a class="download-link" id="audio-download" href="#" download><span><b>课程音频 MP3</b><small>可独立播放，方便回听</small></span><span>保存 ↓</span></a>
+            <a class="download-link" id="zip-download" href="#" download><span><b>全部课件 JPG</b><small>图片压缩包，保留清晰原图</small></span><span>保存 ↓</span></a>
+          </div>
+          <p class="save-note">保存位置由浏览器决定；可在浏览器下载设置中开启“每次询问保存位置”。</p>
+        </div>
+        <section id="transcription-section" class="summary-panel" hidden aria-labelledby="transcription-title">
+          <span class="eyebrow">讯飞 · 课程录音</span><h3 id="transcription-title">把课程录音转成文字</h3>
+          <p class="summary-note">将已提取的音频发送给科大讯飞识别，生成带时间定位的文字稿。调用可能使用讯飞服务额度。</p>
+          <div class="summary-actions"><button id="transcription-generate" class="button primary">生成录音文字稿</button><a id="transcription-view" class="button secondary" href="#" target="_blank" rel="noopener" hidden>查看文字稿 ↗</a><a id="transcription-html" class="button secondary" href="#" download hidden>下载 HTML ↓</a><a id="transcription-txt" class="button secondary" href="#" download hidden>下载 TXT ↓</a></div>
+          <button id="transcription-key" class="key-settings" type="button">设置 / 更换讯飞凭据</button>
+          <div id="transcription-status" hidden role="status" aria-live="polite"><p id="transcription-message"></p><progress id="transcription-progress" max="100" value="0" aria-label="录音转文字进度"></progress><small id="transcription-detail"></small></div>
+        </section>
+        <section id="summary-section" class="summary-panel" aria-labelledby="summary-title">
+          <span class="eyebrow">DEEPSEEK · 课程复习</span><h3 id="summary-title">选择总结依据</h3>
+          <p class="summary-note">PPT 指本地提取的课件截图，演讲文字来自录音转写。只会发送所选材料给 DeepSeek，生成总结网页；调用会使用 API 额度。</p>
+          <div class="summary-modes" role="group" aria-label="总结依据">
+            <button type="button" class="summary-mode" data-summary-mode="combined" aria-pressed="true" aria-disabled="true" aria-describedby="summary-guide"><strong>PPT + 演讲文字 <span>推荐</span></strong><small>结合课件内容与讲解细节</small></button>
+            <button type="button" class="summary-mode" data-summary-mode="slides" aria-pressed="false" aria-disabled="true" aria-describedby="summary-guide"><strong>仅 PPT</strong><small>只发送提取的课件截图</small></button>
+            <button type="button" class="summary-mode" data-summary-mode="transcript" aria-pressed="false" aria-disabled="true" aria-describedby="summary-guide"><strong>仅演讲文字</strong><small>只发送录音转写文字</small></button>
+          </div>
+          <p id="summary-guide" class="summary-guide" role="status" aria-live="polite">请先上传视频并完成本地预处理。</p>
+          <button id="summary-prerequisite" class="key-settings" type="button">去完成前置步骤 ↑</button>
+          <p id="summary-source" class="summary-note" hidden></p>
           <div class="summary-actions"><button id="summary-generate" class="button primary">生成课程总结</button><a id="summary-view" class="button secondary" href="#" target="_blank" rel="noopener" hidden>查看课程总结 ↗</a><a id="summary-download" class="button secondary" href="#" download hidden>下载总结 HTML ↓</a><button id="summary-regenerate" class="button secondary" hidden>重新生成</button><button id="summary-delete" class="button danger" hidden>删除总结</button></div>
           <button id="summary-key" class="key-settings" type="button">设置 / 更换 API 密钥</button>
           <div id="summary-status" hidden role="status" aria-live="polite"><p id="summary-message"></p><progress id="summary-progress" max="100" value="0" aria-label="课程总结生成进度"></progress><small id="summary-detail"></small></div>

@@ -25,6 +25,8 @@ from .media import PROFILES
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 from .summaries import SummaryManager, SummaryError, SUMMARY_CSP
 from . import summaries as summary_service
+from .transcriptions import TranscriptionManager, TranscriptionError
+from . import transcriptions as transcription_service
 
 # Windows 下 Python 的 mimetypes 会把 .js 识别为 text/plain，浏览器会拒绝执行
 # 前端 module script，导致页面空白。这里强制修正为 application/javascript。
@@ -210,10 +212,12 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         jobs_root = data_dir or Path(os.environ.get("VIDEO_DEMO_DATA", ROOT / "data" / "jobs"))
         app.state.jobs = JobManager(jobs_root)
         app.state.summaries = SummaryManager(app.state.jobs)
+        app.state.transcriptions = TranscriptionManager(app.state.jobs)
         app.state.accounts = AccountStore(jobs_root.parent / "accounts.json")
         app.state.learning = LearningStore(jobs_root.parent / "learning-platform.json")
         yield
         app.state.summaries.close()
+        app.state.transcriptions.close()
         app.state.jobs.close()
 
     app = FastAPI(title="本地视频学习助手 Demo", docs_url=None, redoc_url=None, lifespan=lifespan)
@@ -303,6 +307,21 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if not isinstance(payload.get("api_key"), str):
             raise HTTPException(400, "请输入 API 密钥")
         request.app.state.accounts.api_key(request, payload["api_key"])
+        return {"configured": True, "source": "session"}
+
+    @app.get("/api/ai/xfyun/credentials")
+    async def xfyun_status(request: Request):
+        if request.app.state.accounts.xfyun_credentials(request):
+            return {"configured": True, "source": "session"}
+        try:
+            transcription_service.read_credentials()
+            return {"configured": True, "source": "environment"}
+        except TranscriptionError:
+            return {"configured": False, "source": None}
+
+    @app.post("/api/ai/xfyun/credentials")
+    async def set_xfyun_credentials(request: Request):
+        request.app.state.accounts.xfyun_credentials(request, await json_object(request))
         return {"configured": True, "source": "session"}
 
     def require_role(request: Request, expected: str):
@@ -727,7 +746,10 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.get("/api/jobs")
     async def list_jobs(request: Request):
         user = request.app.state.accounts.current(request)
-        return request.app.state.jobs.list(owner_id=user["id"])
+        return [summary_options(request, job) for job in request.app.state.jobs.list(owner_id=user["id"])]
+
+    def summary_options(request, job):
+        return {**job, "summary_options": request.app.state.summaries.options(job)}
 
     @app.post("/api/jobs", status_code=202)
     async def upload(request: Request, profile: str = "balanced"):
@@ -779,7 +801,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         except Exception:
             manager.fail_upload(job["id"], "无法写入本地文件，请检查剩余空间和目录权限。")
             raise HTTPException(500, "无法保存视频到项目目录")
-        return manager.get(job["id"])
+        return summary_options(request, manager.get(job["id"]))
 
     def find_job(request: Request, job_id: str, owner_only=False):
         user = request.app.state.accounts.current(request)
@@ -796,15 +818,18 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
     @app.get("/api/jobs/{job_id}")
     async def get_job(request: Request, job_id: str):
-        return find_job(request, job_id, owner_only=True)
+        return summary_options(request, find_job(request, job_id, owner_only=True))
 
     @app.delete("/api/jobs/{job_id}")
     async def delete_job(request: Request, job_id: str):
         find_job(request, job_id, owner_only=True)
-        summaries, jobs, learning = request.app.state.summaries, request.app.state.jobs, request.app.state.learning
-        with summaries.lock, learning.lock, jobs.lock:
+        summaries, transcriptions, jobs, learning = (request.app.state.summaries, request.app.state.transcriptions,
+                                                     request.app.state.jobs, request.app.state.learning)
+        with summaries.lock, transcriptions.lock, learning.lock, jobs.lock:
             if summaries.active == job_id:
                 raise HTTPException(409, "总结正在生成，请等待完成后再删除任务")
+            if transcriptions.active == job_id:
+                raise HTTPException(409, "录音正在转写，请等待完成后再删除任务")
             affected = [(course, course["resources"]) for course in learning.data["courses"]
                         if any(r.get("job_id") == job_id for r in course["resources"])]
             removed = sum(sum(r.get("job_id") == job_id for r in resources) for _, resources in affected)
@@ -826,7 +851,42 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
     @app.post("/api/jobs/{job_id}/cancel")
     async def cancel_job(request: Request, job_id: str):
         find_job(request, job_id, owner_only=True)
-        return request.app.state.jobs.cancel(job_id)
+        return summary_options(request, request.app.state.jobs.cancel(job_id))
+
+    @app.post("/api/jobs/{job_id}/transcription", status_code=202)
+    async def start_transcription(request: Request, job_id: str):
+        find_job(request, job_id, owner_only=True)
+        try:
+            return request.app.state.transcriptions.start(
+                job_id, credentials=request.app.state.accounts.xfyun_credentials(request))
+        except TranscriptionError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+
+    @app.get("/api/jobs/{job_id}/transcription/view")
+    async def view_transcription(request: Request, job_id: str):
+        job = find_job(request, job_id, owner_only=True)
+        try:
+            path = request.app.state.transcriptions.file(job_id, "html")
+            html = path.read_text(encoding="utf-8")
+        except TranscriptionError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+        except OSError:
+            raise HTTPException(507, "无法读取文字稿文件") from None
+        account = quote(request.app.state.accounts.current(request)["id"], safe="")
+        toolbar = (f'<nav class="download-bar"><a href="/api/jobs/{job_id}/transcription/download/html?account={account}">下载 HTML</a>'
+                   f'<a href="/api/jobs/{job_id}/transcription/download/txt?account={account}">下载 TXT</a></nav>')
+        html = html.replace("<main aria-label=", toolbar + "<main aria-label=", 1)
+        return HTMLResponse(html, headers={"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; base-uri 'none'; frame-ancestors 'none'"})
+
+    @app.get("/api/jobs/{job_id}/transcription/download/{kind}")
+    async def download_transcription(request: Request, job_id: str, kind: str):
+        job = find_job(request, job_id, owner_only=True)
+        try:
+            path = request.app.state.transcriptions.file(job_id, kind)
+        except TranscriptionError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+        return FileResponse(path, media_type="text/html" if kind == "html" else "text/plain",
+                            filename=Path(job["filename"]).stem + "-课程录音文字稿." + kind)
 
     @app.post("/api/jobs/{job_id}/summary", status_code=202)
     async def generate_summary(request: Request, job_id: str):
@@ -836,7 +896,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if not isinstance(regenerate, bool):
             raise HTTPException(400, "regenerate 必须为布尔值")
         try:
-            return request.app.state.summaries.start(job_id, api_key=request.app.state.accounts.api_key(request), regenerate=regenerate)
+            return request.app.state.summaries.start(job_id, api_key=request.app.state.accounts.api_key(request),
+                                                     regenerate=regenerate, mode=payload.get("mode", "slides"))
         except SummaryError as error:
             raise HTTPException(error.status_code, str(error)) from None
 
@@ -847,7 +908,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             request.app.state.summaries.delete_summary(job_id)
         except SummaryError as error:
             raise HTTPException(error.status_code, str(error)) from None
-        return request.app.state.jobs.get(job_id)
+        return summary_options(request, request.app.state.jobs.get(job_id))
 
     def summary_html(request, job_id, offline=False):
         try:
@@ -871,11 +932,13 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         html = summary_html(request, job_id)
         user = request.app.state.accounts.current(request)
         # Only adapt local image paths for authenticated HTTP viewing; prose stays unchanged.
-        for page in job["result"]["pages"]:
+        saved_mode = job.get("summary", {}).get("available_mode", job.get("summary", {}).get("mode", "slides"))
+        for page in (job["result"].get("pages", []) if saved_mode != "transcript" else []):
             html = html.replace("slides/" + page["filename"], f"/api/jobs/{job_id}/pages/{page['number']}?account={user['id']}")
         account = quote(user["id"], safe="")
         toolbar = ('<nav aria-label="总结操作" style="padding:16px;background:#edf5ef;color:#164b3e;font:15px sans-serif;display:flex;gap:24px;flex-wrap:wrap">'
-                   f'<a href="/api/jobs/{job_id}/summary/download?account={account}" download>下载总结 HTML（含截图）</a>'
+                   f'<span>来源：{escape(summary_service.MODES[saved_mode])}</span>'
+                   f'<a href="/api/jobs/{job_id}/summary/download?account={account}" download>下载总结 HTML</a>'
                    f'<a href="{escape(f"/?page=video&account={account}&job={job_id}")}" target="_blank" rel="noopener">管理总结：删除 / 重新生成 ↗</a></nav>')
         html = re.sub(r"(<body\b[^>]*>)", lambda match: match.group(0) + toolbar, html, count=1, flags=re.I)
         policy = SUMMARY_CSP.replace("sandbox allow-same-origin;", "sandbox allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox;")

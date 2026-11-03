@@ -126,9 +126,14 @@ class DemoIntegrationTest(unittest.TestCase):
         self.fail("Job did not finish")
 
     def test_01_video_pdf_jpg_audio_roundtrip(self):
-        job = self.wait_job(self.submit(self.video)["id"])
+        uploaded = self.submit(self.video)
+        self.assertEqual(set(uploaded["summary_options"]), {"slides", "transcript", "combined"})
+        job = self.wait_job(uploaded["id"])
         self.assertEqual(job["status"], "completed", job["message"])
         self.assertEqual(len(job["result"]["pages"]), 3, job["result"])
+        self.assertTrue(job["summary_options"]["slides"]["ready"])
+        self.assertFalse(job["summary_options"]["transcript"]["ready"])
+        self.assertFalse(job["summary_options"]["combined"]["ready"])
         self.assertTrue(job["result"]["metadata"]["has_audio"])
         self.assertEqual(job["filename"], self.video.name)
         prefix = f"/api/jobs/{job['id']}"

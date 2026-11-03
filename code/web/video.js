@@ -1,4 +1,5 @@
 import { ensureApiKey, openApiKeyDialog } from "/static/ai-key.js";
+import { ensureXfyunCredentials, openXfyunDialog } from "/static/xfyun-key.js";
 
 export function mountVideo(config, user, fileUrl) {
 
@@ -7,7 +8,11 @@ const $ = (id) => document.getElementById(id);
 const activeStates = new Set(["uploading", "queued", "running", "cancelling"]);
 let selectedFile, currentJob, currentJobData, upload, timer, busy = false;
 let summaryTimer, summarySubmitting = false, summaryLastAlert = "", summaryNetworkAlert = false;
+let summaryMode = "combined", summaryModeJob;
+const summaryModes = {combined: "PPT + 演讲文字", slides: "仅 PPT", transcript: "仅演讲文字"};
+let transcriptionTimer, transcriptionSubmitting = false, transcriptionLastAlert = "", transcriptionNetworkAlert = false;
 const summaryActive = new Set(["preparing", "generating", "saving"]);
+const transcriptionActive = new Set(["converting", "uploading", "submitting", "recognizing", "saving"]);
 const stageOrder = {uploading: 0, queued: 1, probing: 1, scanning: 1, extracting: 2, pdf: 2, audio: 3, completed: 4};
 const stateNames = {uploading: "传入中", queued: "等待处理", running: "处理中", cancelling: "取消中", completed: "已完成", failed: "失败", cancelled: "已取消", interrupted: "已中断"};
 
@@ -28,30 +33,124 @@ function summaryError(message, key = message) {
   $("summary-detail").textContent = "提取结果已保留，解决问题后可重试。";
   if (summaryLastAlert !== key) { summaryLastAlert = key; window.alert(message); }
 }
+function transcriptionError(message, key = message) {
+  $("transcription-status").hidden = false;
+  $("transcription-message").textContent = message;
+  $("transcription-progress").value = 0;
+  $("transcription-detail").textContent = "已提取的课件和 MP3 保留，可稍后重试。";
+  if (transcriptionLastAlert !== key) { transcriptionLastAlert = key; window.alert(message); }
+}
+function transcriptionView(job) {
+  const state = job.transcription || {};
+  const active = transcriptionActive.has(state.status);
+  const available = !!state.available && state.status === "completed";
+  const visible = job.status === "completed" && !!job.result?.audio;
+  $("transcription-section").hidden = !visible;
+  $("transcription-generate").hidden = available || job.owner_id !== user.id;
+  $("transcription-generate").disabled = active || transcriptionSubmitting;
+  $("transcription-generate").textContent = active ? "正在转写…" : state.status === "failed" || state.status === "interrupted" ? "重试转写" : "生成录音文字稿";
+  for (const [id, suffix] of [["transcription-view", "view"], ["transcription-html", "download/html"], ["transcription-txt", "download/txt"]]) {
+    $(id).hidden = !available;
+    $(id).href = fileUrl(`/api/jobs/${job.id}/transcription/${suffix}`);
+  }
+  $("transcription-status").hidden = !state.status;
+  $("transcription-message").textContent = state.message || "";
+  if (state.progress === null) $("transcription-progress").removeAttribute("value");
+  else $("transcription-progress").value = state.progress || 0;
+  const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(state.started_at)) / 1000));
+  $("transcription-detail").textContent = active ? `已等待 ${elapsed || 0} 秒 · 可离开本页，保持本地服务运行即可。` : available ? `已保存 · ${state.segment_count} 段 · 用时 ${state.elapsed_seconds} 秒` : "课件和 MP3 已保留，可以重试。";
+  if (["failed", "interrupted"].includes(state.status)) transcriptionError(state.message, `${job.id}:${state.started_at}:${state.status}`);
+}
+async function pollTranscription(jobId) {
+  clearTimeout(transcriptionTimer);
+  try {
+    const job = await api(`/api/jobs/${jobId}`);
+    if (currentJob !== jobId) return;
+    transcriptionNetworkAlert = false;
+    transcriptionView(job);
+    summaryView(job);
+    if (transcriptionActive.has(job.transcription?.status)) transcriptionTimer = setTimeout(() => pollTranscription(jobId), 1000);
+    else await refreshHistory();
+  } catch (error) {
+    if (currentJob !== jobId) return;
+    if (!transcriptionNetworkAlert) {
+      transcriptionNetworkAlert = true;
+      transcriptionError(`无法读取转写进度：${error.message}`, `network:${jobId}`);
+    }
+    if (![401, 403, 404].includes(error.status)) transcriptionTimer = setTimeout(() => pollTranscription(jobId), 3000);
+    else $("transcription-generate").disabled = false;
+  }
+}
+function summaryServiceOutdated() {
+  return !!currentJobData && !currentJobData.summary_options;
+}
+function summaryOption(mode) {
+  if (summaryServiceOutdated()) return {ready: false, reason: "当前本地服务尚未加载新版总结功能。请关闭本项目的启动窗口并重新运行 run.bat，再刷新页面重新登录。已提取的课件会保留，无需重新上传或预处理。"};
+  const option = currentJobData?.summary_options?.[mode] || {ready: false, reason: "请先上传视频并完成本地预处理；使用演讲文字还需完成录音转文字。"};
+  return {...option, reason: option.reason.replace("下方“生成录音文字稿”", "上方“生成录音文字稿”")};
+}
+function needsTranscription(mode) {
+  return mode !== "slides" && currentJobData?.status === "completed" && currentJobData?.result?.audio
+    && currentJobData?.transcription?.status !== "completed" && (mode !== "combined" || summaryOption("slides").ready);
+}
+function showSummaryGuide(mode) {
+  const option = summaryOption(mode);
+  if (summaryServiceOutdated()) {
+    $("summary-guide").textContent = option.reason;
+    $("summary-prerequisite").hidden = false;
+    $("summary-prerequisite").textContent = "重启服务后重新检查 ↻";
+    return;
+  }
+  const active = summarySubmitting || summaryActive.has(currentJobData?.summary?.status);
+  const action = currentJobData?.summary?.available ? "重新生成" : "生成总结";
+  $("summary-guide").textContent = active ? "总结正在生成，请等待完成后再选择方式。" : option.ready ? mode === summaryMode ? `已选择${summaryModes[summaryMode]}，点击下方按钮${action}。` : `可使用${summaryModes[mode]}，点击选择后${action}。` : option.reason;
+  $("summary-prerequisite").hidden = option.ready || active;
+  $("summary-prerequisite").dataset.mode = mode;
+  $("summary-prerequisite").textContent = needsTranscription(mode) ? transcriptionActive.has(currentJobData?.transcription?.status) ? "查看录音转写进度 ↑" : "去生成录音文字稿 ↑" : "去完成本地预处理 ↑";
+}
 function summaryView(job) {
   currentJobData = job;
-  const state = job.summary || {};
+  const state = job?.summary || {};
+  if (summaryModeJob !== job?.id) {
+    summaryModeJob = job?.id;
+    summaryMode = state.mode || "combined";
+  }
   const active = summaryActive.has(state.status);
   const available = state.available ?? state.status === "completed";
-  $("summary-section").hidden = job.status !== "completed";
-  $("summary-generate").hidden = job.owner_id !== user.id;
+  $("summary-section").hidden = false;
+  for (const button of document.querySelectorAll("[data-summary-mode]")) {
+    const mode = button.dataset.summaryMode, option = summaryOption(mode);
+    button.setAttribute("aria-pressed", String(mode === summaryMode));
+    button.setAttribute("aria-disabled", String(!option.ready || active || summarySubmitting));
+    button.title = active || summarySubmitting ? "总结正在生成，请等待完成。" : option.reason || `使用${summaryModes[mode]}生成总结`;
+  }
+  const option = summaryOption(summaryMode);
+  showSummaryGuide(summaryMode);
+  $("summary-generate").hidden = !!job && job.owner_id !== user.id;
   $("summary-generate").disabled = active || summarySubmitting;
+  $("summary-generate").setAttribute("aria-disabled", String(!option.ready || active || summarySubmitting));
+  $("summary-generate").title = option.reason;
   $("summary-generate").textContent = active ? "正在生成总结…" : state.status === "completed" ? "总结已生成" : state.status ? "重试生成总结" : "生成课程总结";
   $("summary-generate").hidden ||= available;
   $("summary-view").hidden = !available;
-  $("summary-view").href = fileUrl(`/api/jobs/${job.id}/summary/view`);
+  $("summary-view").href = job ? fileUrl(`/api/jobs/${job.id}/summary/view`) : "#";
   $("summary-download").hidden = !available;
-  $("summary-download").href = fileUrl(`/api/jobs/${job.id}/summary/download`);
-  $("summary-regenerate").hidden = !available || job.owner_id !== user.id;
-  $("summary-delete").hidden = !state.status || job.owner_id !== user.id;
+  $("summary-download").href = job ? fileUrl(`/api/jobs/${job.id}/summary/download`) : "#";
+  $("summary-regenerate").hidden = !available || job?.owner_id !== user.id;
+  $("summary-delete").hidden = !state.status || job?.owner_id !== user.id;
   $("summary-regenerate").disabled = active || summarySubmitting;
+  $("summary-regenerate").setAttribute("aria-disabled", String(!option.ready || active || summarySubmitting));
+  $("summary-regenerate").title = option.reason;
+  $("summary-regenerate").textContent = `重新生成（${summaryModes[summaryMode]}）`;
   $("summary-delete").disabled = active || summarySubmitting;
+  $("summary-source").hidden = !available;
+  $("summary-source").textContent = `当前保存的总结依据：${summaryModes[state.available_mode || state.mode || "slides"]}。重新生成成功后将替换当前总结。`;
   $("summary-status").hidden = !state.status;
   $("summary-message").textContent = state.message || "";
   if (state.progress === null) $("summary-progress").removeAttribute("value");
   else $("summary-progress").value = state.progress || 0;
   const elapsed = Math.max(0, Math.floor((Date.now() - Date.parse(state.started_at)) / 1000));
-  $("summary-detail").textContent = active ? `已等待 ${elapsed || 0} 秒 · 可离开本页，保持本地服务运行即可；刷新后会恢复进度。` : state.status === "completed" ? `已保存 · ${state.image_count} 张截图 · 用时 ${state.elapsed_seconds} 秒` : "提取结果已保留，可以重新生成。";
+  $("summary-detail").textContent = active ? `已等待 ${elapsed || 0} 秒 · 可离开本页，保持本地服务运行即可；刷新后会恢复进度。` : state.status === "completed" ? `已保存 · ${summaryModes[state.available_mode || state.mode || "slides"]} · 用时 ${state.elapsed_seconds} 秒` : "提取结果已保留，可以重新生成。";
   if (["failed", "interrupted"].includes(state.status)) summaryError(state.message, `${job.id}:${state.started_at}:${state.status}`);
 }
 async function pollSummary(jobId) {
@@ -128,9 +227,11 @@ function progressView(stage, percent, message) {
 }
 function showJob(job) {
   clearTimeout(summaryTimer);
-  $("summary-section").hidden = true;
+  clearTimeout(transcriptionTimer);
+  $("transcription-section").hidden = true;
   currentJob = job.id;
   currentJobData = job;
+  summaryView(job);
   const current = new URL(location.href); current.searchParams.set("job", job.id); history.replaceState(null, "", current);
   $("error").hidden = true;
   $("cancel").disabled = job.status === "cancelling";
@@ -160,6 +261,7 @@ function showJob(job) {
   for (const [id, kind] of [["pdf-download", "pdf"], ["zip-download", "zip"], ["audio-download", "audio"]]) {
     $(id).href = fileUrl(`/api/jobs/${job.id}/files/${kind}`);
   }
+  $("pdf-view").href = fileUrl(`/api/jobs/${job.id}/files/pdf?preview=true`);
   $("audio-download").hidden = !result.audio;
   $("page-count").textContent = `${result.pages.length} 页`;
   $("gallery").replaceChildren();
@@ -181,7 +283,9 @@ function showJob(job) {
   }
   $("preview-section").hidden = false;
   summaryView(job);
+  transcriptionView(job);
   if (summaryActive.has(job.summary?.status)) summaryTimer = setTimeout(() => pollSummary(job.id), 500);
+  if (transcriptionActive.has(job.transcription?.status)) transcriptionTimer = setTimeout(() => pollTranscription(job.id), 500);
 }
 async function poll(jobId) {
   clearTimeout(timer);
@@ -210,8 +314,10 @@ async function refreshHistory(restore = false) {
     const name = document.createElement("span"); name.textContent = job.filename;
     const available = job.summary?.available ?? job.summary?.status === "completed";
     const generating = summaryActive.has(job.summary?.status);
+    const transcribing = transcriptionActive.has(job.transcription?.status);
     const summaryName = generating ? "总结生成中" : available ? "已有总结" : "";
-    const status = document.createElement("small"); status.textContent = `${stateNames[job.status] || job.status} ${summaryName ? "· " + summaryName : ""} · ${new Date(job.created_at).toLocaleString("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}`;
+    const transcriptName = transcribing ? "录音转写中" : job.transcription?.available ? "已有文字稿" : "";
+    const status = document.createElement("small"); status.textContent = `${stateNames[job.status] || job.status} ${summaryName ? "· " + summaryName : ""} ${transcriptName ? "· " + transcriptName : ""} · ${new Date(job.created_at).toLocaleString("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}`;
     info.append(name, status);
     const actions = document.createElement("div"); actions.className = "history-actions";
     if (available) {
@@ -223,11 +329,16 @@ async function refreshHistory(restore = false) {
         actions.append(link);
       }
     }
+    if (job.transcription?.available) {
+      const link = document.createElement("a"); link.textContent = "查看文字稿 ↗";
+      link.href = fileUrl(`/api/jobs/${job.id}/transcription/view`);
+      link.target = "_blank"; link.rel = "noopener"; actions.append(link);
+    }
     const remove = document.createElement("button"); remove.className = "danger"; remove.textContent = "删除任务";
-    remove.disabled = activeStates.has(job.status) || generating;
+    remove.disabled = activeStates.has(job.status) || generating || transcribing;
     remove.title = remove.disabled ? "请等待处理完成，或先取消视频提取" : "删除任务记录及全部输出文件";
     remove.onclick = async () => {
-      if (!window.confirm(`确定删除“${job.filename}”？任务记录、JPG/PDF/MP3、总结及关联课程资源将一并删除，无法恢复。`)) return;
+      if (!window.confirm(`确定删除“${job.filename}”？任务记录、JPG/PDF/MP3、总结、文字稿及关联课程资源将一并删除，无法恢复。`)) return;
       remove.disabled = true;
       try {
         await api(`/api/jobs/${job.id}`, {method: "DELETE"});
@@ -246,14 +357,15 @@ async function refreshHistory(restore = false) {
   }
 }
 function resetJob() {
-  clearTimeout(timer); clearTimeout(summaryTimer); currentJob = null; currentJobData = null;
+  clearTimeout(timer); clearTimeout(summaryTimer); clearTimeout(transcriptionTimer); currentJob = null; currentJobData = null;
   const url = new URL(location.href); url.searchParams.delete("job"); history.replaceState(null, "", url);
-  for (const id of ["result", "processing", "preview-section", "summary-section", "error"]) $(id).hidden = true;
+  for (const id of ["result", "processing", "preview-section", "transcription-section", "error"]) $(id).hidden = true;
+  summaryView(null);
   $("idle").hidden = false; setBusy(false);
 }
 async function refreshCurrent() {
   await refreshHistory();
-  if (!currentJob || summarySubmitting || upload) return;
+  if (!currentJob || summarySubmitting || transcriptionSubmitting || upload) return;
   const jobId = currentJob;
   try {
     const job = await api(`/api/jobs/${jobId}`);
@@ -265,7 +377,7 @@ async function refreshCurrent() {
 }
 $("history-refresh").onclick = () => refreshCurrent().catch(error => window.alert(error.message));
 window.addEventListener("focus", () => {
-  if (!summarySubmitting && !upload && !document.querySelector("dialog[open]")) refreshCurrent().catch(error => showError(error.message));
+  if (!summarySubmitting && !transcriptionSubmitting && !upload && !document.querySelector("dialog[open]")) refreshCurrent().catch(error => showError(error.message));
 });
 $("file").addEventListener("change", event => chooseFile(event.target.files[0]));
 $("dropzone").addEventListener("keydown", event => {
@@ -285,8 +397,9 @@ $("profile").addEventListener("change", () => {
 });
 $("start").addEventListener("click", () => {
   if (!selectedFile || busy) return;
-  clearTimeout(timer); clearTimeout(summaryTimer); currentJob = null;
-  $("summary-section").hidden = true;
+  clearTimeout(timer); clearTimeout(summaryTimer); clearTimeout(transcriptionTimer); currentJob = null;
+  summaryView(null);
+  $("transcription-section").hidden = true;
   setBusy(true); $("error").hidden = true; $("preview-section").hidden = true;
   $("cancel").disabled = false;
   progressView("uploading", 0, "正在将视频写入项目目录…");
@@ -315,10 +428,17 @@ $("start").addEventListener("click", () => {
   upload.send(selectedFile);
 });
 async function generateSummary(regenerate = false) {
-  if (!currentJob || summarySubmitting) return;
-  if (regenerate && !window.confirm("重新生成会再次调用 DeepSeek 并使用 API 额度。成功后替换当前总结；失败时保留旧总结。是否继续？")) return;
+  if (summarySubmitting || summaryActive.has(currentJobData?.summary?.status)) return;
+  if (!currentJob || !summaryOption(summaryMode).ready) {
+    showSummaryGuide(summaryMode);
+    $("summary-prerequisite").focus();
+    return;
+  }
+  const mode = summaryMode;
+  if (regenerate && !window.confirm(`将根据${summaryModes[mode]}重新生成，并使用 DeepSeek API 额度。成功后替换当前总结；失败时保留旧总结。是否继续？`)) return;
   const jobId = currentJob;
   summarySubmitting = true; summaryLastAlert = ""; summaryNetworkAlert = false;
+  summaryView(currentJobData);
   $("summary-generate").disabled = true;
   $("summary-status").hidden = false;
   $("summary-message").textContent = "正在检查密钥并创建总结任务…";
@@ -330,7 +450,7 @@ async function generateSummary(regenerate = false) {
       if (currentJob === jobId) summaryView(currentJobData);
       return;
     }
-    await api(`/api/jobs/${jobId}/summary`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({regenerate})});
+    await api(`/api/jobs/${jobId}/summary`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({regenerate, mode})});
     summarySubmitting = false;
     await refreshHistory();
     await pollSummary(jobId);
@@ -344,8 +464,47 @@ async function generateSummary(regenerate = false) {
       // A lost POST response does not imply the server failed to start the task.
       if (!error.status) summaryTimer = setTimeout(() => pollSummary(jobId), 3000);
     }
-  } finally { summarySubmitting = false; }
+  } finally {
+    summarySubmitting = false;
+    if (currentJob === jobId) {
+      const active = summaryActive.has(currentJobData?.summary?.status);
+      for (const button of document.querySelectorAll("[data-summary-mode]")) {
+        const option = summaryOption(button.dataset.summaryMode);
+        button.setAttribute("aria-disabled", String(active || !option.ready));
+        button.title = active ? "总结正在生成，请等待完成。" : option.reason;
+      }
+      for (const id of ["summary-generate", "summary-regenerate"]) {
+        $(id).disabled = active;
+        $(id).setAttribute("aria-disabled", String(active || !summaryOption(summaryMode).ready));
+      }
+      showSummaryGuide(summaryMode);
+    }
+  }
 }
+for (const button of document.querySelectorAll("[data-summary-mode]")) {
+  button.onclick = () => {
+    const mode = button.dataset.summaryMode;
+    if (summarySubmitting || summaryActive.has(currentJobData?.summary?.status) || !summaryOption(mode).ready) {
+      showSummaryGuide(mode);
+      return;
+    }
+    summaryMode = mode;
+    summaryView(currentJobData);
+  };
+  button.onmouseenter = button.onfocus = () => showSummaryGuide(button.dataset.summaryMode);
+  button.onmouseleave = () => showSummaryGuide(summaryMode);
+}
+$("summary-prerequisite").onclick = async () => {
+  if (summaryServiceOutdated()) {
+    try { await refreshCurrent(); showSummaryGuide(summaryMode); }
+    catch (error) { window.alert(`无法检查服务：${error.message}`); }
+    return;
+  }
+  const mode = $("summary-prerequisite").dataset.mode;
+  const target = needsTranscription(mode) ? $("transcription-generate") : $("dropzone");
+  target.scrollIntoView({behavior: "smooth", block: "center"});
+  target.focus({preventScroll: true});
+};
 $("summary-generate").onclick = () => generateSummary(false);
 $("summary-regenerate").onclick = () => generateSummary(true);
 $("summary-key").onclick = () => openApiKeyDialog();
@@ -359,6 +518,34 @@ $("summary-delete").onclick = async () => {
     await refreshHistory();
   } catch (error) { window.alert(`删除总结失败：${error.message}`); $("summary-delete").disabled = false; }
 };
+async function generateTranscription() {
+  if (!currentJob || transcriptionSubmitting) return;
+  const jobId = currentJob;
+  transcriptionSubmitting = true; transcriptionLastAlert = ""; transcriptionNetworkAlert = false;
+  $("transcription-generate").disabled = true;
+  $("transcription-status").hidden = false;
+  $("transcription-message").textContent = "正在检查讯飞凭据…";
+  $("transcription-progress").removeAttribute("value");
+  $("transcription-detail").textContent = "请稍候";
+  try {
+    if (!await ensureXfyunCredentials()) {
+      transcriptionSubmitting = false;
+      if (currentJob === jobId) transcriptionView(currentJobData);
+      return;
+    }
+    await api(`/api/jobs/${jobId}/transcription`, {method: "POST"});
+    transcriptionSubmitting = false;
+    await pollTranscription(jobId);
+  } catch (error) {
+    if (currentJob === jobId) {
+      transcriptionError(`无法转写录音：${error.message}`);
+      $("transcription-generate").disabled = false;
+      if (!error.status) transcriptionTimer = setTimeout(() => pollTranscription(jobId), 3000);
+    }
+  } finally { transcriptionSubmitting = false; }
+}
+$("transcription-generate").onclick = generateTranscription;
+$("transcription-key").onclick = () => openXfyunDialog();
 $("cancel").addEventListener("click", async () => {
   if (upload) { upload.abort(); return; }
   if (!currentJob) return;
@@ -369,6 +556,7 @@ $("cancel").addEventListener("click", async () => {
 $("close-dialog").addEventListener("click", () => $("image-dialog").close());
 $("image-dialog").addEventListener("click", event => { if (event.target === $("image-dialog")) $("image-dialog").close(); });
 (async () => {
+  summaryView(null);
   try { await refreshHistory(true); setBusy(busy); }
   catch (error) { showError(`本地服务连接失败：${error.message}`); }
 })();

@@ -7,12 +7,14 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 import uvicorn
 
 from demo.app import create_app
+from demo.summaries import SummaryError
 
 
 class TeacherAnalyticsTests(unittest.TestCase):
@@ -45,8 +47,9 @@ class TeacherAnalyticsTests(unittest.TestCase):
         self.server.should_exit = True
         self.thread.join(10)
 
-    def request(self, path, payload=None, account="teacher-demo-1", **headers):
+    def request(self, path, payload=None, account="teacher-demo-1", method=None, **headers):
         request = Request(self.url + path, data=json.dumps(payload).encode() if payload is not None else None,
+                          method=method,
                           headers={"X-Local-Token": self.token, "X-Account-ID": account,
                                    "Content-Type": "application/json", **headers})
         with self.client.open(request, timeout=5) as response:
@@ -152,6 +155,83 @@ class TeacherAnalyticsTests(unittest.TestCase):
             self.request("/api/teacher/analytics")
         self.assertEqual(caught.exception.code, 401)
         self.login("teacher1", "Teach123!")
+        self.assertEqual(self.request("/api/teacher/analytics"), before)
+
+    def test_video_and_summary_deletion_preserve_grades_profiles_and_review(self):
+        """Resource cleanup must not remove a teammate's persisted learning evidence."""
+        teacher = self.login("teacher1", "Teach123!")
+        student = self.login("student1", "Learn123!")
+        course = self.course(teacher, "Video cleanup regression")
+        self.submit(student, course, 1)
+        app = self.server.config.app
+        jobs = app.state.jobs
+        job = jobs.create("test.mp4", "balanced", teacher)
+        job_id = job["id"]
+        folder = jobs.root / job_id
+        (folder / "slides").mkdir()
+        (folder / "slides" / "slide-0001.jpg").write_bytes(b"image fixture")
+        (folder / "slides.pdf").write_bytes(b"%PDF-test fixture")
+        (folder / "summary.html").write_text("test-only summary fixture", encoding="utf-8")
+        jobs.update(job_id, status="completed", result={"pages": [{"number": 1, "filename": "slide-0001.jpg", "timestamp": 0}]},
+                    summary={"status": "completed", "available": True})
+        jobs.active = None
+        self.request(f"/api/courses/{course['id']}/resources", {"name": "Video slides", "job_id": job_id}, account=teacher)
+
+        analytics = self.request("/api/teacher/analytics")
+        records = self.request("/api/learning-records", account=student)
+        wrong = self.request("/api/wrong-questions", account=student)
+        self.assertTrue(wrong)
+        # Published resources are readable in the course; private task state is not.
+        request = Request(self.url + f"/api/jobs/{job_id}/files/pdf", headers={"X-Account-ID": student})
+        with self.client.open(request, timeout=5) as response:
+            self.assertTrue(response.read().startswith(b"%PDF"))
+        for suffix, method in [("", "GET"), ("", "DELETE"), ("/summary/view", "GET"), ("/summary", "DELETE")]:
+            with self.subTest(suffix=suffix, method=method), self.assertRaises(HTTPError) as caught:
+                self.request(f"/api/jobs/{job_id}{suffix}", account=student, method=method)
+            self.assertEqual(caught.exception.code, 404)
+            caught.exception.close()
+        self.assertEqual(self.request("/api/teacher/analytics"), analytics)
+
+        self.request(f"/api/jobs/{job_id}/summary", method="DELETE")
+        self.assertFalse((folder / "summary.html").exists())
+        self.assertTrue((folder / "slides.pdf").is_file())
+        self.assertEqual(self.request("/api/teacher/analytics"), analytics)
+        self.assertEqual(self.request(f"/api/jobs/{job_id}")["summary"], {})
+
+        deleted = self.request(f"/api/jobs/{job_id}", method="DELETE")
+        self.assertEqual(deleted["removed_resources"], 1)
+        self.assertFalse(folder.exists())
+        saved_course = self.request(f"/api/courses/{course['id']}")
+        self.assertEqual(len(saved_course["resources"]), 1)
+        self.assertEqual(len(saved_course["questions"]), 3)
+        self.assertEqual(self.request("/api/teacher/analytics"), analytics)
+        self.assertEqual(self.request("/api/learning-records", account=student), records)
+        self.assertEqual(self.request("/api/wrong-questions", account=student), wrong)
+        self.stop_server()
+        self.start_server()
+        self.login("teacher1", "Teach123!")
+        self.login("student1", "Learn123!")
+        self.assertEqual(self.request("/api/jobs"), [])
+        self.assertEqual(self.request("/api/teacher/analytics"), analytics)
+        self.assertEqual(self.request("/api/learning-records", account=student), records)
+        self.assertEqual(self.request("/api/wrong-questions", account=student), wrong)
+
+    def test_session_api_keys_never_leak_into_teacher_profiles_or_persist(self):
+        teacher = self.login("teacher1", "Teach123!")
+        student = self.login("student1", "Learn123!")
+        self.submit(student, self.course(teacher, "Key isolation regression"), 2)
+        before = self.request("/api/teacher/analytics")
+        fixture_key = "test-only-session-secret"
+        with patch("demo.summaries.read_api_key", side_effect=SummaryError("No environment key", 400)):
+            self.request("/api/ai/key", {"api_key": fixture_key}, account=student)
+            self.assertTrue(self.request("/api/ai/key", account=student)["configured"])
+            self.assertFalse(self.request("/api/ai/key", account=teacher)["configured"])
+            self.assertEqual(self.request("/api/teacher/analytics"), before)
+            for file in self.data.parent.rglob("*.json"):
+                self.assertNotIn(fixture_key, file.read_text(encoding="utf-8"))
+            self.request("/api/auth/logout", {}, account=student)
+            self.login("student1", "Learn123!")
+            self.assertFalse(self.request("/api/ai/key", account=student)["configured"])
         self.assertEqual(self.request("/api/teacher/analytics"), before)
 
 

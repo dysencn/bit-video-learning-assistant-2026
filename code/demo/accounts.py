@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 import re
 import secrets
+import shutil
 import threading
 import time
 import uuid
@@ -20,12 +21,16 @@ from fastapi.responses import JSONResponse
 DEMO_TEACHER = "teacher-demo-1"
 DEMO_STUDENT = "student-demo-1"
 SESSION_SECONDS = 12 * 60 * 60
-# 演示账号按专业组归属：teacher1/student1 软件工程，teacher2/student2 人工智能（与预置课程同组，便于演示隔离）。
+# 专业属于学生；教师可以创建面向任意专业的课程。
 DEMO_ACCOUNTS = [
-    {"id": DEMO_TEACHER, "username": "teacher1", "password": "Teach123!", "name": "王老师", "role": "teacher", "demo": True, "major_id": "m-soft"},
-    {"id": "teacher-demo-2", "username": "teacher2", "password": "Teach456!", "name": "李老师", "role": "teacher", "demo": True, "major_id": "m-ai"},
+    {"id": DEMO_TEACHER, "username": "teacher1", "password": "Teach123!", "name": "王老师", "role": "teacher", "demo": True, "major_id": None},
+    {"id": "teacher-demo-2", "username": "teacher2", "password": "Teach456!", "name": "李老师", "role": "teacher", "demo": True, "major_id": None},
     {"id": DEMO_STUDENT, "username": "student1", "password": "Learn123!", "name": "张同学", "role": "student", "demo": True, "major_id": "m-soft"},
     {"id": "student-demo-2", "username": "student2", "password": "Learn456!", "name": "陈同学", "role": "student", "demo": True, "major_id": "m-ai"},
+    *[{"id": f"student-demo-{n}", "username": f"student{n}", "password": "Learn123!", "name": name,
+       "role": "student", "demo": True, "major_id": major} for n, name, major in [
+        (3, "林同学", "m-cs"), (4, "许同学", "m-soft"), (5, "赵同学", "m-ai"),
+        (6, "苏同学", "m-cs"), (7, "周同学", "m-ai"), (8, "顾同学", "m-soft")]],
 ]
 
 
@@ -43,10 +48,22 @@ class AccountStore:
             demo_major = {u["username"]: u["major_id"] for u in DEMO_ACCOUNTS}
             migrated = False
             for user in self.users:
-                if not user.get("major_id"):
+                if user["role"] == "teacher" and user.get("major_id") is not None:
+                    user["major_id"] = None
+                    migrated = True
+                elif user["role"] == "student" and not user.get("major_id"):
                     user["major_id"] = demo_major.get(user["username"], "m-soft")
                     migrated = True
+            # Add newly introduced demo students without changing existing credentials.
+            for sample in DEMO_ACCOUNTS:
+                if not any(u["id"] == sample["id"] or u["username"].lower() == sample["username"].lower()
+                           for u in self.users):
+                    self.users.append(dict(sample))
+                    migrated = True
             if migrated:
+                backup = path.with_name(f"{path.stem}.before-v0.5.json")
+                if not backup.exists():
+                    shutil.copy2(path, backup)
                 self.save()
         else:
             self.users = [dict(user) for user in DEMO_ACCOUNTS]
@@ -60,17 +77,21 @@ class AccountStore:
 
     @staticmethod
     def public(user):
-        return {key: user.get(key) for key in ("id", "username", "name", "role", "major_id")}
+        return {key: user.get(key) for key in ("id", "username", "name", "role", "major_id", "demo")}
 
     def examples(self):
         with self.lock:
             return [{**self.public(user), "password": user["password"]} for user in self.users if user.get("demo")]
 
     def students_in_major(self, major_id: str) -> list[dict]:
-        """Return safe student account summaries for a teacher's major group."""
+        """Return safe student account summaries for an explicit student major."""
         with self.lock:
             return [self.public(user) for user in self.users
                     if user["role"] == "student" and user.get("major_id") == major_id]
+
+    def students(self):
+        with self.lock:
+            return [self.public(user) for user in self.users if user["role"] == "student"]
 
     def register(self, payload):
         username = payload.get("username", "")
@@ -85,13 +106,14 @@ class AccountStore:
         self.validate_password(password)
         if not isinstance(role, str) or role not in {"teacher", "student"}:
             raise HTTPException(400, "请选择学生或教师身份")
-        if not isinstance(major_id, str) or not major_id.strip():
+        if role == "student" and (not isinstance(major_id, str) or not major_id.strip()):
             raise HTTPException(400, "请选择专业组")
         with self.lock:
             if any(u["username"].lower() == username.strip().lower() for u in self.users):
                 raise HTTPException(409, "该账号已注册，请使用其他账号或直接登录")
             user = {"id": uuid.uuid4().hex, "username": username.strip(), "name": name.strip(),
-                    "password": password, "role": role, "demo": False, "major_id": major_id.strip(),
+                    "password": password, "role": role, "demo": False,
+                    "major_id": major_id.strip() if role == "student" else None,
                     "created_at": datetime.now(timezone.utc).isoformat()}
             self.users.append(user)
             self.save()

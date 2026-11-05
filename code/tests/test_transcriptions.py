@@ -96,7 +96,7 @@ class TranscriptionHTTPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
-        cls.app = create_app(Path(cls.temp.name) / "jobs")
+        cls.app = create_app(Path(cls.temp.name) / "jobs", seed_demo_history=False)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]

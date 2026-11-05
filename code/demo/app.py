@@ -22,6 +22,8 @@ from starlette.requests import ClientDisconnect
 
 from .jobs import BusyError, JobManager
 from .media import PROFILES
+from .demo_catalog import demo_courses, upgrade_catalog, seed_activity
+from .learning_metrics import accepts_student, build_profiles, teacher_analytics as aggregate_teacher
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 from .summaries import SummaryManager, SummaryError, SUMMARY_CSP
 from . import summaries as summary_service
@@ -83,37 +85,17 @@ class LearningStore:
         self.lock = threading.RLock()
         self.data = {"courses": [], "submissions": [], "wrong_questions": []}
         if path.is_file():
-            try:
-                self.data.update(json.loads(path.read_text(encoding="utf-8")))
-            except (OSError, ValueError):
-                pass
+            # Invalid existing data must fail visibly, never be replaced by demo defaults.
+            self.data.update(json.loads(path.read_text(encoding="utf-8")))
+            if not self.data.get("course_audiences_version"):
+                backup = path.with_name(f"{path.stem}.before-v0.5.json")
+                if not backup.exists():
+                    shutil.copy2(path, backup)
         if not self.data["courses"]:
-            self.data["courses"] = [{
-                "id": "course-demo", "title": "Python 程序设计入门", "description": "认识变量、条件判断与基本程序结构。",
-                "teacher": "王老师", "status": "published", "created_at": self.now(), "major_id": "m-soft",
-                "chapters": [
-                    {"id": "ch-1", "title": "变量与数据类型", "order": 1},
-                    {"id": "ch-2", "title": "输出与程序结构", "order": 2},
-                ],
-                "resources": [{"id": "res-demo", "name": "第一讲：变量与数据类型", "kind": "课件", "job_id": None, "chapter_id": "ch-1"}],
-                "knowledge_points": [dict(kp) for kp in DEFAULT_KNOWLEDGE_POINTS],
-                "questions": [
-                    {"id": "q1", "text": "Python 中用于保存数据的命名空间通常称为？", "options": ["变量", "函数", "循环", "模块"], "answer": 0, "knowledge_point_id": "kp1", "chapter_id": "ch-1"},
-                    {"id": "q2", "text": "下面哪个是 Python 的字符串？", "options": ["123", "True", "\"学习平台\"", "3.14"], "answer": 2, "knowledge_point_id": "kp2", "chapter_id": "ch-1"},
-                    {"id": "q3", "text": "print() 的主要作用是？", "options": ["输出内容", "删除文件", "创建数据库", "安装软件"], "answer": 0, "knowledge_point_id": "kp3", "chapter_id": "ch-2"},
-                ],
-            }]
+            self.data["courses"] = demo_courses()
+            self.data["demo_catalog_version"] = 2
             self.save()
         migrated = False
-        # 同目录账号表用于把旧课程按创建教师的专业组补归属。
-        teacher_id_to_major = None
-        accounts_path = path.parent / "accounts.json"
-        if accounts_path.is_file():
-            try:
-                teacher_id_to_major = {u["id"]: u.get("major_id", "m-soft")
-                                       for u in json.loads(accounts_path.read_text(encoding="utf-8"))["users"]}
-            except (OSError, ValueError, KeyError, TypeError):
-                teacher_id_to_major = None
         if "majors" not in self.data or not isinstance(self.data.get("majors"), list) or not self.data["majors"]:
             self.data["majors"] = [dict(m) for m in DEFAULT_MAJORS]
             migrated = True
@@ -124,12 +106,13 @@ class LearningStore:
             if "teacher_id" not in course:
                 course["teacher_id"] = DEMO_TEACHER
                 migrated = True
-            # 旧课程无专业组归属：按创建教师的专业组补（读同目录账号表），未知教师归软件工程。
-            if "major_id" not in course or not course.get("major_id"):
-                teacher_major = None
-                if teacher_id_to_major is not None:
-                    teacher_major = teacher_id_to_major.get(course.get("teacher_id"))
-                course["major_id"] = teacher_major or "m-soft"
+            if "major_ids" not in course:
+                legacy_major = course.get("major_id")
+                valid = {major["id"] for major in self.data["majors"]}
+                course["major_ids"] = [legacy_major] if legacy_major in valid else list(valid)
+                migrated = True
+            if "major_id" in course:
+                course.pop("major_id")
                 migrated = True
             if "questions" not in course or not isinstance(course["questions"], list):
                 course["questions"] = []
@@ -175,6 +158,11 @@ class LearningStore:
                 # 旧记录没有调度数据：默认立即进入复习队列。
                 record["next_review_at"] = record.get("last_wrong_at", self.now())
                 migrated = True
+        if upgrade_catalog(self.data):
+            migrated = True
+        if self.data.get("course_audiences_version") != 1:
+            self.data["course_audiences_version"] = 1
+            migrated = True
         if migrated:
             self.save()
 
@@ -195,6 +183,7 @@ class LearningStore:
         if not include_answers:
             for question in result["questions"]:
                 question.pop("answer", None)
+                question.pop("explanation", None)
         return result
 
     def courses(self, include_drafts=False, include_answers=False):
@@ -206,7 +195,7 @@ class LearningStore:
         return next((course for course in self.data["courses"] if course["id"] == course_id), None)
 
 
-def create_app(data_dir: Path | None = None) -> FastAPI:
+def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None = None) -> FastAPI:
     @asynccontextmanager
     async def lifespan(app):
         jobs_root = data_dir or Path(os.environ.get("VIDEO_DEMO_DATA", ROOT / "data" / "jobs"))
@@ -215,6 +204,10 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         app.state.transcriptions = TranscriptionManager(app.state.jobs)
         app.state.accounts = AccountStore(jobs_root.parent / "accounts.json")
         app.state.learning = LearningStore(jobs_root.parent / "learning-platform.json")
+        history_enabled = seed_demo_history if seed_demo_history is not None else os.environ.get("VIDEO_DEMO_SEED_HISTORY", "1") != "0"
+        if history_enabled:
+            if seed_activity(app.state.learning.data, app.state.accounts.users):
+                app.state.learning.save()
         yield
         app.state.summaries.close()
         app.state.transcriptions.close()
@@ -247,7 +240,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
     @app.get("/api/config")
     async def config():
-        return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.4.0", "local_only": True}
+        return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.5.0", "local_only": True,
+                "features": {"course_audiences": True, "student_profiles": True}}
 
     async def json_object(request):
         try:
@@ -267,7 +261,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         payload = await json_object(request)
         # 专业组唯一归属：注册的专业组必须存在于预置专业组列表中。
         majors = request.app.state.learning.data.get("majors", [])
-        if payload.get("major_id") not in {m["id"] for m in majors}:
+        if payload.get("role") == "student" and (not isinstance(payload.get("major_id"), str)
+                or payload["major_id"] not in {m["id"] for m in majors}):
             raise HTTPException(400, "请选择有效的专业组")
         return request.app.state.accounts.register(payload)
 
@@ -345,7 +340,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if teacher:
             return [c for c in courses if c["teacher_id"] == user["id"]]
         # 学生只看本专业组内的已发布课程。
-        return [c for c in courses if c.get("major_id") == user.get("major_id")]
+        return [c for c in courses if accepts_student(c, user)]
 
     @app.get("/api/courses/{course_id}")
     async def get_course(request: Request, course_id: str):
@@ -355,9 +350,20 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if not course or (not own and course["status"] != "published"):
             raise HTTPException(404, "课程不存在或尚未发布")
         # 学生跨专业组不可见。
-        if not own and user["role"] == "student" and course.get("major_id") != user.get("major_id"):
+        if not own and user["role"] == "student" and not accepts_student(course, user):
             raise HTTPException(404, "课程不存在或尚未发布")
         return request.app.state.learning.public_course(course, include_answers=bool(own))
+
+    def course_audience(request, payload):
+        valid = [major["id"] for major in request.app.state.learning.data["majors"]]
+        selected = payload.get("major_ids")
+        # Old clients may still submit a single major_id; teachers are no longer restricted by it.
+        if "major_ids" not in payload:
+            selected = [payload["major_id"]] if payload.get("major_id") else valid
+        if (not isinstance(selected, list) or not selected
+                or any(not isinstance(mid, str) or mid not in valid for mid in selected)):
+            raise HTTPException(400, "请至少选择一个有效的学生专业")
+        return list(dict.fromkeys(selected))
 
     @app.post("/api/courses")
     async def create_course(request: Request):
@@ -366,20 +372,29 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         title = str(payload.get("title", "")).strip()
         if not title:
             raise HTTPException(400, "请填写课程名称")
-        # 课程唯一专业组归属：只能建到自己所在专业组。
-        major_id = str(payload.get("major_id", "")).strip() or user["major_id"]
-        if major_id != user.get("major_id"):
-            raise HTTPException(400, "只能创建自己专业组内的课程")
+        major_ids = course_audience(request, payload)
         with request.app.state.learning.lock:
             course = {"id": uuid.uuid4().hex[:12], "title": title[:80],
                       "description": str(payload.get("description", "")).strip()[:300],
                       "teacher": user["name"], "teacher_id": user["id"], "status": "draft", "created_at": LearningStore.now(),
-                      "major_id": major_id,
+                      "major_ids": major_ids,
                       "chapters": [{"id": uuid.uuid4().hex[:10], "title": "第 1 章", "order": 1}],
                       "resources": [], "questions": []}
             request.app.state.learning.data["courses"].insert(0, course)
             request.app.state.learning.save()
             return request.app.state.learning.public_course(course, include_answers=True)
+
+    @app.post("/api/courses/{course_id}/audience")
+    async def update_audience(request: Request, course_id: str):
+        course = owned_course(request, course_id)
+        payload = await json_object(request)
+        if "major_ids" not in payload:
+            raise HTTPException(400, "请提供课程面向的学生专业")
+        audience = course_audience(request, payload)
+        with request.app.state.learning.lock:
+            course["major_ids"] = audience
+            request.app.state.learning.save()
+        return request.app.state.learning.public_course(course, include_answers=True)
 
     @app.post("/api/courses/{course_id}/chapters")
     async def add_chapter(request: Request, course_id: str):
@@ -465,7 +480,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                 raise HTTPException(400, "章节不存在")
             course["questions"].append({"id": uuid.uuid4().hex[:10], "text": text[:300],
                                         "options": [str(item).strip()[:100] for item in options[:4]], "answer": answer,
-                                        "knowledge_point_id": knowledge_point_id, "chapter_id": chapter_id})
+                                        "knowledge_point_id": knowledge_point_id, "chapter_id": chapter_id,
+                                        "explanation": str(payload.get("explanation", "")).strip()[:2000]})
             request.app.state.learning.save()
         return request.app.state.learning.public_course(course, include_answers=True)
 
@@ -488,7 +504,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         course = request.app.state.learning.course(course_id)
         if not course or course["status"] != "published":
             raise HTTPException(404, "课程不存在或未发布")
-        if course.get("major_id") != user.get("major_id"):
+        if not accepts_student(course, user):
             raise HTTPException(404, "课程不存在或未发布")
         # 章节练习：传 chapter_id 只判该章题目，不传则整课判分。
         chapter_id = payload.get("chapter_id")
@@ -511,7 +527,9 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
             correct += int(is_correct)
             details.append({"question_id": question["id"], "selected": selected, "correct": is_correct,
                             "answer": question["answer"], "text": question["text"], "options": question["options"],
-                            "chapter_id": question.get("chapter_id")})
+                            "chapter_id": question.get("chapter_id"), "explanation": question.get("explanation", ""),
+                            "knowledge_point_name": next((point["name"] for point in course.get("knowledge_points", [])
+                                                          if point["id"] == question.get("knowledge_point_id")), "未分类")})
         submission = {"id": uuid.uuid4().hex[:12], "course_id": course_id,
                       "student": user["name"], "student_id": user["id"],
                       "submitted_at": LearningStore.now(), "score": round(correct / len(questions) * 100),
@@ -558,7 +576,8 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
                                   "chapter_id": chapter_id, "chapter_title": chapter_index.get(chapter_id, ""),
                                   "question_snapshot": {"text": question.get("text", detail["text"]),
                                                         "options": question.get("options", detail.get("options", [])),
-                                                        "answer": question.get("answer", detail["answer"])},
+                                                        "answer": question.get("answer", detail["answer"]),
+                                                        "explanation": question.get("explanation", "")},
                                   "wrong_count": 1, "last_wrong_at": submission["submitted_at"],
                                   "first_wrong_at": submission["submitted_at"],
                                   "status": "unresolved",
@@ -590,94 +609,42 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
 
     @app.get("/api/teacher/analytics")
     async def teacher_analytics(request: Request):
-        """Small, explainable teacher dashboard built from persisted submissions.
-
-        This intentionally reports only evidence already collected by the demo:
-        scores, submissions and question-level correctness.  It does not invent
-        behavioural labels such as "diligent" without learning-duration data.
-        """
         teacher = require_role(request, "teacher")
         store = request.app.state.learning
+        # Always acquire account data before the learning lock (same order as registration).
+        students = request.app.state.accounts.students()
         with store.lock:
             courses = [course for course in store.data["courses"] if course["teacher_id"] == teacher["id"]]
-            course_by_id = {course["id"]: course for course in courses}
-            submissions = [record for record in store.data["submissions"] if record["course_id"] in course_by_id]
+            return aggregate_teacher(courses, store.data["submissions"], students)
 
-            course_stats = []
-            for course in courses:
-                items = [record for record in submissions if record["course_id"] == course["id"]]
-                participants = {record["student_id"] for record in items}
-                question_stats = []
-                for question in course.get("questions", []):
-                    answers = [detail for record in items for detail in record.get("details", [])
-                               if detail["question_id"] == question["id"]]
-                    if answers:
-                        correct = sum(1 for detail in answers if detail["correct"])
-                        question_stats.append({"question_id": question["id"], "text": question["text"],
-                                               "knowledge_point": next((kp["name"] for kp in course.get("knowledge_points", [])
-                                                                          if kp["id"] == question.get("knowledge_point_id")), "未分类"),
-                                               "answer_count": len(answers), "correct_rate": round(correct / len(answers) * 100)})
-                course_stats.append({"course_id": course["id"], "title": course["title"],
-                                     "status": course["status"], "participants": len(participants),
-                                     "submission_count": len(items),
-                                     "average_score": round(sum(item["score"] for item in items) / len(items)) if items else None,
-                                     "pass_rate": round(sum(item["score"] >= 60 for item in items) / len(items) * 100) if items else None,
-                                     "weak_questions": sorted(question_stats, key=lambda item: item["correct_rate"])[:3]})
-
-            student_accounts = request.app.state.accounts.students_in_major(teacher.get("major_id"))
-            profiles = []
-            available_course_count = max(1, sum(course["status"] == "published" for course in courses) or len(courses))
-            for student in student_accounts:
-                items = [record for record in submissions if record["student_id"] == student["id"]]
-                wrong_by_point: dict[str, int] = {}
-                correct_answers = total_answers = 0
-                for record in items:
-                    course = course_by_id[record["course_id"]]
-                    questions = {question["id"]: question for question in course.get("questions", [])}
-                    points = {point["id"]: point["name"] for point in course.get("knowledge_points", [])}
-                    for detail in record.get("details", []):
-                        total_answers += 1
-                        correct_answers += int(detail["correct"])
-                        if not detail["correct"]:
-                            point = points.get(questions.get(detail["question_id"], {}).get("knowledge_point_id"), "未分类")
-                            wrong_by_point[point] = wrong_by_point.get(point, 0) + 1
-                average = round(sum(item["score"] for item in items) / len(items)) if items else None
-                latest = max((item["submitted_at"] for item in items), default=None)
-                studied_courses = len({item["course_id"] for item in items})
-                profiles.append({"student_id": student["id"], "student": student["name"],
-                                 "submission_count": len(items), "course_count": studied_courses,
-                                 "average_score": average, "latest_submitted_at": latest,
-                                 "weak_points": [name for name, _ in sorted(wrong_by_point.items(), key=lambda item: item[1], reverse=True)[:2]],
-                                 "course_participation": round(studied_courses / available_course_count * 100),
-                                 "mastery_score": round(correct_answers / total_answers * 100) if total_answers else 0,
-                                 "needs_attention": bool(items) and average is not None and average < 60,
-                                 "not_started": not items})
-
-            max_submissions = max((profile["submission_count"] for profile in profiles), default=1)
-            for profile in profiles:
-                profile["practice_activity"] = round(profile["submission_count"] / max_submissions * 100) if profile["submission_count"] else 0
-
-            scores = [item["score"] for item in submissions]
-            latest = max((item["submitted_at"] for item in submissions), default=None)
-            return {"overview": {"course_count": len(courses),
-                                  "published_count": sum(course["status"] == "published" for course in courses),
-                                  "student_count": len(student_accounts),
-                                  "participant_count": len({item["student_id"] for item in submissions}),
-                                  "submission_count": len(submissions),
-                                  "average_score": round(sum(scores) / len(scores)) if scores else None,
-                                  "pass_rate": round(sum(score >= 60 for score in scores) / len(scores) * 100) if scores else None,
-                                  "latest_submitted_at": latest,
-                                  "attention_count": sum(profile["needs_attention"] or profile["not_started"] for profile in profiles)},
-                    "courses": course_stats,
-                    "students": sorted(profiles, key=lambda profile: (not profile["not_started"], not profile["needs_attention"],
-                                                                      profile["average_score"] if profile["average_score"] is not None else 101))}
+    @app.get("/api/student/profile")
+    async def student_profile(request: Request):
+        student = require_role(request, "student")
+        store = request.app.state.learning
+        students = request.app.state.accounts.students()
+        with store.lock:
+            # Include this student's historical courses even after the audience is edited.
+            history = {record["course_id"] for record in store.data["submissions"] if record["student_id"] == student["id"]}
+            courses = [course for course in store.data["courses"]
+                       if (course["status"] == "published" and accepts_student(course, student)) or course["id"] in history]
+            profiles = build_profiles(courses, store.data["submissions"], students)
+            own = next((profile for profile in profiles if profile["student_id"] == student["id"]), None)
+            if own is None:
+                own = {"student_id": student["id"], "student": student["name"], "major_id": student.get("major_id"),
+                       "submission_count": 0, "course_count": 0, "available_course_count": 0,
+                       "average_score": None, "latest_submitted_at": None, "weak_points": [],
+                       "course_participation": 0, "practice_activity": 0, "mastery_score": 0,
+                       "needs_attention": False, "not_started": True}
+            return {"profile": own, "scope": "本人可学习及已参与课程；仅统计正式练习提交，复习不计分"}
 
     @app.get("/api/wrong-questions")
     async def wrong_questions(request: Request):
         user = require_role(request, "student")
         store = request.app.state.learning
         with store.lock:
-            return [dict(record) for record in store.data.setdefault("wrong_questions", [])
+            names = {course["id"]: course["title"] for course in store.data["courses"]}
+            return [{**record, "course_name": names.get(record["course_id"], "历史课程")}
+                    for record in store.data.setdefault("wrong_questions", [])
                     if record["student_id"] == user["id"]]
 
     @app.post("/api/wrong-questions/{question_id}/mastered")
@@ -811,7 +778,7 @@ def create_app(data_dir: Path | None = None) -> FastAPI:
         if job.get("owner_id", DEMO_TEACHER) != user["id"]:
             published = request.app.state.learning.courses()
             shared = any(r.get("job_id") == job_id for c in published
-                         if c.get("major_id") == user.get("major_id") for r in c["resources"])
+                         if accepts_student(c, user) for r in c["resources"])
             if owner_only or not shared:
                 raise HTTPException(404, "找不到这个任务或没有访问权限")
         return job

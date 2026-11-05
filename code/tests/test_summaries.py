@@ -85,7 +85,7 @@ class SummaryHTTPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.temp = tempfile.TemporaryDirectory()
-        cls.app = create_app(Path(cls.temp.name) / "jobs")
+        cls.app = create_app(Path(cls.temp.name) / "jobs", seed_demo_history=False)
         with socket.socket() as sock:
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
@@ -206,7 +206,7 @@ class SummaryHTTPTests(unittest.TestCase):
         # Published course resources never confer access to another account's task.
         course = self.app.state.learning.data["courses"][0]
         course["resources"].append({"id": "shared-test", "job_id": self.job_id})
-        course["major_id"] = "m-ai"
+        course["major_ids"] = ["m-ai"]
         self.app.state.learning.save()
         self.assertIn(self.job_id, [j["id"] for j in self.request("/api/jobs")])
         self.assertNotIn(self.job_id, [j["id"] for j in self.request("/api/jobs", account="student-demo-2")])

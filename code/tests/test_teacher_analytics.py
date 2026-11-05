@@ -31,7 +31,7 @@ class TeacherAnalyticsTests(unittest.TestCase):
             sock.bind(("127.0.0.1", 0))
             port = sock.getsockname()[1]
         self.url = f"http://127.0.0.1:{port}"
-        self.server = uvicorn.Server(uvicorn.Config(create_app(self.data), host="127.0.0.1", port=port,
+        self.server = uvicorn.Server(uvicorn.Config(create_app(self.data, seed_demo_history=False), host="127.0.0.1", port=port,
                                                    log_level="error"))
         self.thread = threading.Thread(target=self.server.run, daemon=True)
         self.thread.start()
@@ -63,8 +63,8 @@ class TeacherAnalyticsTests(unittest.TestCase):
                                             "name": username, "role": role, "major_id": major})
         return self.login(username, "Analytics123!")
 
-    def course(self, teacher, title, publish=True):
-        course = self.request("/api/courses", {"title": title}, account=teacher)
+    def course(self, teacher, title, publish=True, major_ids=None):
+        course = self.request("/api/courses", {"title": title, "major_ids": major_ids or ["m-soft"]}, account=teacher)
         cid = course["id"]
         self.request(f"/api/courses/{cid}/resources", {"name": "Analytics fixture"}, account=teacher)
         for number in range(3):
@@ -90,8 +90,10 @@ class TeacherAnalyticsTests(unittest.TestCase):
                          **{"X-Demo-Role": "teacher"})
         self.assertEqual(caught.exception.code, 403)
 
-    def test_statistics_use_owned_courses_and_same_major_profiles(self):
+    def test_statistics_use_owned_courses_and_course_audiences(self):
         teacher = self.login("teacher1", "Teach123!")
+        # Narrow this fixture's pre-existing Python course, independently of teacher affiliation.
+        self.request("/api/courses/course-demo/audience", {"major_ids": ["m-soft"]})
         student_zero = self.login("student1", "Learn123!")
         student_low = self.register("analytics_low")
         student_pass = self.register("analytics_pass")
@@ -105,21 +107,23 @@ class TeacherAnalyticsTests(unittest.TestCase):
         self.submit(student_zero, self.course(peer_teacher, "Peer course"), 3)
         other_teacher = self.login("teacher2", "Teach456!")
         other_student = self.login("student2", "Learn456!")
-        self.submit(other_student, self.course(other_teacher, "Other major"), 3)
+        self.submit(other_student, self.course(other_teacher, "Other major", major_ids=["m-ai"]), 3)
 
         result = self.request("/api/teacher/analytics?major_id=m-ai&teacher_id=" + other_teacher)
         overview = result["overview"]
-        self.assertEqual(overview["student_count"], 4)
+        self.assertEqual(overview["student_count"], 6)
         self.assertEqual(overview["participant_count"], 3)
         self.assertEqual(overview["submission_count"], 3)
         self.assertEqual(overview["average_score"], 33)
         self.assertEqual(overview["pass_rate"], 33)
-        self.assertEqual(overview["attention_count"], 3)
+        self.assertEqual(overview["attention_count"], 5)
         self.assertEqual({c["title"] for c in result["courses"]},
                          {"Python 程序设计入门", "Owned published course", "Owned draft"})
         self.assertNotIn(other_student, [s["student_id"] for s in result["students"]])
-        self.assertEqual([s["student_id"] for s in result["students"]],
-                         [student_idle, student_zero, student_low, student_pass])
+        self.assertEqual({s["student_id"] for s in result["students"] if s["not_started"]},
+                         {student_idle, "student-demo-4", "student-demo-8"})
+        self.assertEqual([s["student_id"] for s in result["students"] if not s["not_started"]],
+                         [student_zero, student_low, student_pass])
         profiles = {s["student_id"]: s for s in result["students"]}
         self.assertEqual(profiles[student_zero]["average_score"], 0)
         self.assertEqual(profiles[student_zero]["mastery_score"], 0)
@@ -132,7 +136,7 @@ class TeacherAnalyticsTests(unittest.TestCase):
         other_result = self.request("/api/teacher/analytics", account=other_teacher)
         self.assertEqual(other_result["overview"]["submission_count"], 1)
         self.assertEqual(other_result["overview"]["average_score"], 100)
-        self.assertEqual([s["student_id"] for s in other_result["students"]], [other_student])
+        self.assertEqual({s["student_id"] for s in other_result["students"]}, {other_student, "student-demo-5", "student-demo-7"})
 
     def test_empty_group_has_no_fabricated_scores(self):
         teacher = self.register("analytics_empty", role="teacher", major="m-cs")

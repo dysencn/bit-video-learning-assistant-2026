@@ -22,13 +22,14 @@ from starlette.requests import ClientDisconnect
 
 from .jobs import BusyError, JobManager
 from .media import PROFILES
-from .demo_catalog import demo_courses, upgrade_catalog, seed_activity
+from .demo_catalog import demo_courses, upgrade_catalog, upgrade_programming_samples, seed_activity
 from .learning_metrics import accepts_student, build_profiles, teacher_analytics as aggregate_teacher
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 from .summaries import SummaryManager, SummaryError, SUMMARY_CSP
 from . import summaries as summary_service
 from .transcriptions import TranscriptionManager, TranscriptionError
 from . import transcriptions as transcription_service
+from .programming import ProgrammingManager, validate_question, LIMITS as PYTHON_LIMITS
 
 # Windows 下 Python 的 mimetypes 会把 .js 识别为 text/plain，浏览器会拒绝执行
 # 前端 module script，导致页面空白。这里强制修正为 application/javascript。
@@ -160,6 +161,8 @@ class LearningStore:
                 migrated = True
         if upgrade_catalog(self.data):
             migrated = True
+        if upgrade_programming_samples(self.data):
+            migrated = True
         if self.data.get("course_audiences_version") != 1:
             self.data["course_audiences_version"] = 1
             migrated = True
@@ -180,6 +183,10 @@ class LearningStore:
         result = dict(course)
         result["resources"] = [dict(item) for item in course["resources"]]
         result["questions"] = [dict(item) for item in course["questions"]]
+        result["programming_questions"] = [dict(item) for item in course.get("programming_questions", [])]
+        if not include_answers:
+            for question in result["programming_questions"]:
+                question.pop("test_cases", None)
         if not include_answers:
             for question in result["questions"]:
                 question.pop("answer", None)
@@ -204,11 +211,13 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         app.state.transcriptions = TranscriptionManager(app.state.jobs)
         app.state.accounts = AccountStore(jobs_root.parent / "accounts.json")
         app.state.learning = LearningStore(jobs_root.parent / "learning-platform.json")
+        app.state.programming = ProgrammingManager(app.state.learning)
         history_enabled = seed_demo_history if seed_demo_history is not None else os.environ.get("VIDEO_DEMO_SEED_HISTORY", "1") != "0"
         if history_enabled:
             if seed_activity(app.state.learning.data, app.state.accounts.users):
                 app.state.learning.save()
         yield
+        app.state.programming.close()
         app.state.summaries.close()
         app.state.transcriptions.close()
         app.state.jobs.close()
@@ -241,7 +250,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
     @app.get("/api/config")
     async def config():
         return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.5.0", "local_only": True,
-                "features": {"course_audiences": True, "student_profiles": True}}
+                "features": {"course_audiences": True, "student_profiles": True, "python_programming": True}}
 
     async def json_object(request):
         try:
@@ -490,12 +499,57 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         course = owned_course(request, course_id)
         if not course:
             raise HTTPException(404, "课程不存在")
-        if not course["resources"] or not course["questions"]:
+        if not course["resources"] or not (course["questions"] or course.get("programming_questions")):
             raise HTTPException(400, "发布前至少需要一份学习资源和一道练习题")
         with request.app.state.learning.lock:
             course["status"] = "published"
             request.app.state.learning.save()
         return request.app.state.learning.public_course(course, include_answers=True)
+
+    @app.post("/api/courses/{course_id}/programming-questions", status_code=201)
+    async def add_programming_question(request: Request, course_id: str):
+        course = owned_course(request, course_id)
+        payload = await json_object(request)
+        try:
+            question = validate_question(payload)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        chapter_id = payload.get("chapter_id") or course["chapters"][0]["id"]
+        if chapter_id not in {chapter["id"] for chapter in course["chapters"]}:
+            raise HTTPException(400, "章节不存在")
+        question["chapter_id"] = chapter_id
+        with request.app.state.learning.lock:
+            course.setdefault("programming_questions", []).append(question)
+            request.app.state.learning.save()
+        return question
+
+    @app.post("/api/courses/{course_id}/programming-questions/{question_id}/runs", status_code=202)
+    async def run_programming(request: Request, course_id: str, question_id: str):
+        user = require_role(request, "student")
+        course = request.app.state.learning.course(course_id)
+        if not course or course["status"] != "published" or not accepts_student(course, user):
+            raise HTTPException(404, "课程不存在或尚未发布")
+        question = next((q for q in course.get("programming_questions", []) if q["id"] == question_id), None)
+        if not question:
+            raise HTTPException(404, "编程题不存在")
+        payload = await json_object(request)
+        code, mode = payload.get("code"), payload.get("mode", "sample")
+        if not isinstance(code, str) or not code.strip() or len(code.encode("utf-8")) > PYTHON_LIMITS["code_bytes"]:
+            raise HTTPException(400, "请输入 Python 代码，最多 32 KB")
+        if mode not in {"sample", "submit"}:
+            raise HTTPException(400, "请选择运行示例或提交判题")
+        try:
+            return request.app.state.programming.start(user, course, question, code, mode)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc))
+
+    @app.get("/api/programming-runs/{run_id}")
+    async def programming_result(request: Request, run_id: str):
+        user = require_role(request, "student")
+        result = request.app.state.programming.get(run_id, user["id"])
+        if result is None:
+            raise HTTPException(404, "运行记录不存在或服务已重启，请查看已保存的学习记录")
+        return result
 
     @app.post("/api/courses/{course_id}/submissions")
     async def submit_answers(request: Request, course_id: str):
@@ -541,6 +595,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             signature = _answers_signature(answers)
             recent = next((r for r in store.data["submissions"]
                            if r["student_id"] == user["id"] and r["course_id"] == course_id
+                           and r.get("type") != "python"
                            and _within_seconds(r["submitted_at"], submission["submitted_at"], 5)
                            and _answers_signature({d["question_id"]: d["selected"] for d in r["details"]}) == signature), None)
             if recent:

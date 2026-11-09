@@ -1,6 +1,7 @@
 """An explicitly labelled demo catalogue; saved sample answers are graded like real ones."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from .programming import LIMITS as PYTHON_LIMITS
 
 MAJORS = [
     {"id": "m-soft", "name": "软件工程"},
@@ -14,6 +15,45 @@ def question(qid, chapter, point, text, options, answer, explanation):
             "text": text, "options": options, "answer": answer, "explanation": explanation}
 
 
+def demo_programming_questions():
+    """Stable sample IDs, public examples and judge data; no reference solutions."""
+    def build(key, chapter, title, description, examples, hidden):
+        pairs = lambda rows: [{"input": source, "output": expected} for source, expected in rows]
+        return {"id": f"py-demo-{key}", "type": "python", "demo": True,
+                "chapter_id": chapter, "title": title, "text": title,
+                "description": description + "\n\n请从标准输入读取数据，只输出答案，不要输出‘请输入’等提示文字。",
+                "examples": pairs(examples), "test_cases": pairs(examples + hidden),
+                "limits": dict(PYTHON_LIMITS)}
+
+    return [
+        build("sum", "ch-1", "两个整数之和",
+              "读取两个整数 a 和 b，计算并输出它们的和。\n输入：一行两个整数，以空格分隔，-1000000 ≤ a, b ≤ 1000000。\n输出：一行，表示 a + b 的整数。",
+              [("2 3\n", "5\n"), ("-8 1\n", "-7\n")],
+              [("0 0\n", "0\n"), ("1000000 1000000\n", "2000000\n"), ("-1000000 1000000\n", "0\n")]),
+        build("length", "ch-1", "字符串长度",
+              "读取一行文字，统计字符个数。中文、字母和空格都各算一个字符，行末换行符不计入。\n输入：一行字符串，长度为 0～100，可能为空或包含首尾空格。\n输出：一行整数，表示字符个数。",
+              [("Python\n", "6\n"), ("你好 Python\n", "9\n")],
+              [("\n", "0\n"), (" a b \n", "5\n"), ("x" * 100 + "\n", "100\n")]),
+        build("parity", "ch-2", "奇偶判断",
+              "判断一个整数是偶数还是奇数。0 是偶数，负整数也需要正确处理。\n输入：一行整数 n，-1000000 ≤ n ≤ 1000000。\n输出：偶数输出 even，奇数输出 odd，均使用小写字母。",
+              [("8\n", "even\n"), ("7\n", "odd\n")],
+              [("0\n", "even\n"), ("-3\n", "odd\n"), ("-1000000\n", "even\n")]),
+        build("accumulate", "ch-2", "从 1 累加到 n",
+              "计算 1 + 2 + … + n。n 为 0 时结果为 0。可以用循环或求和公式实现。\n输入：一行整数 n，0 ≤ n ≤ 100000。\n输出：一行整数，表示累加结果。",
+              [("5\n", "15\n"), ("0\n", "0\n")],
+              [("1\n", "1\n"), ("100\n", "5050\n"), ("100000\n", "5000050000\n")]),
+        build("maximum", "ch-3", "列表最大值",
+              "读取一个整数列表，输出其中最大的数。注意所有元素都为负数的情况。\n输入：第一行是元素个数 n（1 ≤ n ≤ 100）；第二行是 n 个以空格分隔的整数，每个数的范围为 -1000000～1000000。\n输出：一行整数，表示最大值。",
+              [("5\n3 8 2 8 -1\n", "8\n"), ("3\n-9 -2 -7\n", "-2\n")],
+              [("1\n-1000000\n", "-1000000\n"), ("4\n0 0 0 0\n", "0\n"),
+               ("100\n" + " ".join(str(n) for n in range(1, 101)) + "\n", "100\n")]),
+        build("frequency", "ch-3", "单词频次统计",
+              "统计目标单词在给定单词列表中出现的次数，区分大小写。可以用循环或字典统计。\n输入：第一行是 n（1 ≤ n ≤ 100）；第二行是 n 个用空格分隔的英文单词；第三行是目标单词。每个单词由 1～20 个英文字母组成。\n输出：一行整数，表示目标单词的出现次数。",
+              [("5\npython java python cpp python\npython\n", "3\n"), ("3\nPython python PYTHON\npython\n", "1\n")],
+              [("3\na b c\nz\n", "0\n"), ("1\nhello\nhello\n", "1\n"), ("4\nhi hi hi hi\nhi\n", "4\n")]),
+    ]
+
+
 def demo_courses():
     now = datetime.now(timezone.utc).isoformat()
     python = {
@@ -21,6 +61,7 @@ def demo_courses():
         "teacher_id": "teacher-demo-1", "description": "从变量与流程控制到函数和容器，用可运行的代码建立编程思维。适合所有专业的第一门编程课。",
         "status": "published", "created_at": now, "major_ids": [m["id"] for m in MAJORS],
         "category": "python", "demo": True, "level": "零基础", "duration": "约 3 小时",
+        "programming_questions": demo_programming_questions(),
         "chapters": [
             {"id": "ch-1", "title": "变量与数据类型", "order": 1},
             {"id": "ch-2", "title": "输出与程序结构", "order": 2},
@@ -128,6 +169,25 @@ def upgrade_catalog(data):
             course["major_ids"] = list(sample["major_ids"])
             course.pop("major_id", None)
     data["demo_catalog_version"] = 2
+    return True
+
+
+def upgrade_programming_samples(data):
+    """Append samples once, preserving edits, deletions after migration and all records."""
+    if data.get("demo_programming_version", 0) >= 1:
+        return False
+    course = next((item for item in data["courses"] if item["id"] == "course-demo"), None)
+    if course is not None and course.get("chapters"):
+        questions = course.setdefault("programming_questions", [])
+        ids = {item["id"] for item in questions}
+        chapter_ids = {item["id"] for item in course["chapters"]}
+        for sample in demo_programming_questions():
+            if sample["id"] not in ids:
+                # Keep questions reachable if the teacher has reorganized the demo chapters.
+                if sample["chapter_id"] not in chapter_ids:
+                    sample["chapter_id"] = course["chapters"][0]["id"]
+                questions.append(sample)
+    data["demo_programming_version"] = 1
     return True
 
 

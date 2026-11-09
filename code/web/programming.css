@@ -1,0 +1,22 @@
+#platform .python-workspace{display:grid;grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr);gap:24px;align-items:start}
+#platform .python-workspace .study-card{min-width:0;margin:0}
+#platform .python-workspace h2{font-size:21px}
+#platform .python-description{white-space:pre-wrap;line-height:1.85;overflow-wrap:anywhere}
+#platform .python-io,#platform .python-case{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin:18px 0}
+#platform .python-case{border:1px solid #dce7df;padding:16px;border-radius:12px}
+#platform .python-case .remove-case{grid-column:1/-1;justify-self:end}
+#platform .python-editor{display:flex;background:#152e25;border:1px solid #2f5948;border-radius:12px;overflow:hidden;margin:12px 0 18px;height:340px}
+#platform .python-editor pre,#platform .python-editor textarea{font:14px/1.65 Consolas,'Courier New',monospace;margin:0;padding:16px 12px;border:0;border-radius:0;white-space:pre;tab-size:4;height:100%;box-sizing:border-box}
+#platform .python-editor pre{flex:0 0 44px;text-align:right;overflow:hidden;color:#88ae9b;background:#1c382c;user-select:none}
+#platform .python-editor textarea{flex:1;min-width:0;background:transparent;color:#e2f5e9;resize:none;outline-offset:-3px;overflow:auto}
+#platform .python-io pre,#platform .python-case-result pre,#platform .python-history pre,#programming-form textarea{font:13px/1.65 Consolas,'Courier New',monospace}
+#platform .python-io pre,#platform .python-case-result pre,#platform .python-history pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f0f5ef;padding:14px;border-radius:9px;max-height:280px;overflow:auto}
+#platform .python-error{color:#a23435;overflow-wrap:anywhere}
+#platform .python-case-result{border-top:1px solid #dce7df;padding:14px 0}
+#platform .python-case-result summary,#platform .python-history summary{cursor:pointer;font-weight:600;line-height:1.6}
+#platform .python-history{margin-top:10px;max-width:700px}
+#platform #python-progress{width:100%;accent-color:#37794b}
+#platform #python-running{margin-top:20px}
+#platform .python-question-link{display:flex;justify-content:space-between;gap:16px;align-items:center;padding:18px;border:1px solid #dce7df;border-radius:12px;margin:14px 0}
+@media(max-width:850px){#platform .python-workspace{grid-template-columns:1fr}#platform .python-question-link{flex-wrap:wrap}}
+@media(max-width:500px){#platform .python-io,#platform .python-case{grid-template-columns:1fr}#platform .python-workspace .study-card{padding:18px}#platform .python-editor textarea{font-size:13px}}

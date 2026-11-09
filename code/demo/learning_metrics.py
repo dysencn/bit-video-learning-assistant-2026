@@ -60,13 +60,13 @@ def teacher_analytics(courses, submissions, students):
         items = [record for record in records if record["course_id"] == course["id"]]
         question_stats = []
         points = {point["id"]: point["name"] for point in course.get("knowledge_points", [])}
-        for question in course.get("questions", []):
+        for question in course.get("questions", []) + course.get("programming_questions", []):
             answers = [detail for record in items for detail in record.get("details", [])
                        if detail["question_id"] == question["id"]]
             if answers:
                 question_stats.append({
                     "question_id": question["id"], "text": question["text"],
-                    "knowledge_point": points.get(question.get("knowledge_point_id"), "未分类"),
+                    "knowledge_point": "Python 编程" if question.get("type") == "python" else points.get(question.get("knowledge_point_id"), "未分类"),
                     "answer_count": len(answers),
                     "correct_rate": round(sum(bool(detail["correct"]) for detail in answers) / len(answers) * 100),
                 })

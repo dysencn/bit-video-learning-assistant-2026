@@ -19,6 +19,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import ClientDisconnect
+from starlette.concurrency import run_in_threadpool
 
 from .jobs import BusyError, JobManager
 from .media import PROFILES
@@ -852,6 +853,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 raise HTTPException(409, "总结正在生成，请等待完成后再删除任务")
             if transcriptions.active == job_id:
                 raise HTTPException(409, "录音正在转写，请等待完成后再删除任务")
+            if job_id in jobs.pptx_exporting:
+                raise HTTPException(409, "PPTX 正在导出，请等待完成后再删除任务")
             affected = [(course, course["resources"]) for course in learning.data["courses"]
                         if any(r.get("job_id") == job_id for r in course["resources"])]
             removed = sum(sum(r.get("job_id") == job_id for r in resources) for _, resources in affected)
@@ -966,12 +969,30 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         policy = SUMMARY_CSP.replace("sandbox allow-same-origin;", "sandbox allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox;")
         return HTMLResponse(html, headers={"Content-Security-Policy": policy})
 
+    @app.post("/api/jobs/{job_id}/pptx")
+    async def export_pptx(request: Request, job_id: str):
+        job = find_job(request, job_id, owner_only=True)
+        try:
+            await run_in_threadpool(request.app.state.jobs.export_pptx, job_id)
+        except BusyError as error:
+            raise HTTPException(409, str(error))
+        except FileNotFoundError as error:
+            raise HTTPException(404, str(error))
+        except (ValueError, OSError):
+            raise HTTPException(400, "无法导出 PPTX，请检查课件图片是否完整，以及磁盘空间和目录权限，然后重试。")
+        except ImportError:
+            raise HTTPException(503, "PPTX 导出依赖尚未安装，请停止服务后重新运行 run.py，自动安装依赖。")
+        except Exception:
+            raise HTTPException(500, "PPTX 导出失败，原课件已保留，请稍后重试。")
+        return {"url": f"/api/jobs/{job_id}/files/pptx", "pages": len(job["result"]["pages"])}
+
     @app.get("/api/jobs/{job_id}/files/{kind}")
     async def download(request: Request, job_id: str, kind: str, preview: bool = False):
         job = find_job(request, job_id)
         if job["status"] != "completed":
             raise HTTPException(409, "任务尚未完成")
         files = {"pdf": ("slides.pdf", "application/pdf"), "zip": ("slides.zip", "application/zip"),
+                 "pptx": ("slides.pptx", "application/vnd.openxmlformats-officedocument.presentationml.presentation"),
                  "audio": ("audio.mp3", "audio/mpeg")}
         if kind not in files or (kind == "audio" and not job["result"].get("audio")):
             raise HTTPException(404, "没有这个导出文件")

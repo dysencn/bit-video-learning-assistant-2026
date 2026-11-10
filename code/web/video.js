@@ -9,6 +9,7 @@ const activeStates = new Set(["uploading", "queued", "running", "cancelling"]);
 let selectedFile, currentJob, currentJobData, upload, timer, busy = false;
 let summaryTimer, summarySubmitting = false, summaryLastAlert = "", summaryNetworkAlert = false;
 let summaryMode = "combined", summaryModeJob;
+let pptxExportJob = null, pptxMessageJob = null, pptxMessage = "";
 const summaryModes = {combined: "PPT + 演讲文字", slides: "仅 PPT", transcript: "仅演讲文字"};
 let transcriptionTimer, transcriptionSubmitting = false, transcriptionLastAlert = "", transcriptionNetworkAlert = false;
 const summaryActive = new Set(["preparing", "generating", "saving"]);
@@ -26,6 +27,31 @@ function formatTime(seconds) {
   return `${h ? String(h).padStart(2, "0") + ":" : ""}${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 function showError(message) { $("error").textContent = message; $("error").hidden = false; }
+function pptxView() {
+  const exporting = pptxExportJob === currentJob && !!currentJob;
+  $("pptx-export").disabled = !!pptxExportJob || currentJobData?.status !== "completed";
+  $("pptx-export-label").textContent = exporting ? "正在导出…" : "导出 ↓";
+  $("pptx-status").hidden = !exporting && pptxMessageJob !== currentJob;
+  $("pptx-progress").hidden = !exporting;
+  $("pptx-message").textContent = exporting ? "正在把课件图片逐页放入 PPTX，请稍候…" : pptxMessageJob === currentJob ? pptxMessage : "";
+}
+$("pptx-export").onclick = async () => {
+  if (pptxExportJob || currentJobData?.status !== "completed") return;
+  const jobId = currentJob;
+  pptxExportJob = jobId; pptxMessageJob = null; pptxView();
+  try {
+    const result = await api(`/api/jobs/${jobId}/pptx`, {method: "POST"}, 120000);
+    const download = document.createElement("a");
+    download.href = fileUrl(result.url); download.download = "";
+    document.body.append(download); download.click(); download.remove();
+    pptxMessage = `已生成 ${result.pages} 页 PPTX，并发起下载。再次点击可重新下载。`;
+  } catch (error) {
+    pptxMessage = `PPTX 导出失败：${error.message}`;
+    window.alert(pptxMessage);
+  } finally {
+    pptxMessageJob = jobId; pptxExportJob = null; pptxView();
+  }
+};
 function summaryError(message, key = message) {
   $("summary-status").hidden = false;
   $("summary-message").textContent = message;
@@ -195,9 +221,9 @@ function chooseFile(file) {
   $("error").hidden = true;
   setBusy(false);
 }
-async function api(url, options = {}) {
+async function api(url, options = {}, timeoutMs = 15000) {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 15000);
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
   let response, data;
   try {
     response = await fetch(url, {...options, signal: controller.signal, headers: {"X-Local-Token": config?.token || "", "X-Account-ID": user.id, ...options.headers}});
@@ -231,6 +257,7 @@ function showJob(job) {
   $("transcription-section").hidden = true;
   currentJob = job.id;
   currentJobData = job;
+  pptxView();
   summaryView(job);
   const current = new URL(location.href); current.searchParams.set("job", job.id); history.replaceState(null, "", current);
   $("error").hidden = true;
@@ -338,7 +365,7 @@ async function refreshHistory(restore = false) {
     remove.disabled = activeStates.has(job.status) || generating || transcribing;
     remove.title = remove.disabled ? "请等待处理完成，或先取消视频提取" : "删除任务记录及全部输出文件";
     remove.onclick = async () => {
-      if (!window.confirm(`确定删除“${job.filename}”？任务记录、JPG/PDF/MP3、总结、文字稿及关联课程资源将一并删除，无法恢复。`)) return;
+      if (!window.confirm(`确定删除“${job.filename}”？任务记录、JPG/PDF/PPTX/MP3、总结、文字稿及关联课程资源将一并删除，无法恢复。`)) return;
       remove.disabled = true;
       try {
         await api(`/api/jobs/${job.id}`, {method: "DELETE"});
@@ -361,6 +388,7 @@ function resetJob() {
   const url = new URL(location.href); url.searchParams.delete("job"); history.replaceState(null, "", url);
   for (const id of ["result", "processing", "preview-section", "transcription-section", "error"]) $(id).hidden = true;
   summaryView(null);
+  pptxView();
   $("idle").hidden = false; setBusy(false);
 }
 async function refreshCurrent() {

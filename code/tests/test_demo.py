@@ -21,6 +21,7 @@ from http.cookiejar import CookieJar
 from urllib.request import build_opener, HTTPCookieProcessor
 
 from PIL import Image, ImageDraw
+from pptx import Presentation
 
 from demo.jobs import JobManager
 from demo.media import ffmpeg_path, run_ffmpeg
@@ -159,6 +160,15 @@ class DemoIntegrationTest(unittest.TestCase):
         with self.request(prefix + "/pages/1") as response:
             self.assertEqual(response.headers["Content-Type"], "image/jpeg")
         self.assertFalse(any((self.data / job["id"]).glob("source.*")))
+        exported = self.json_request(prefix + "/pptx", {})
+        self.assertEqual(exported["pages"], 3)
+        with self.request(exported["url"]) as response:
+            deck = Presentation(io.BytesIO(response.read()))
+        self.assertEqual(len(deck.slides), 3)
+        for index, slide in enumerate(deck.slides, 1):
+            self.assertEqual(len(slide.shapes), 1)
+            self.assertEqual(slide.shapes[0].image.blob,
+                             (self.data / job["id"] / "slides" / f"slide-{index:04d}.jpg").read_bytes())
 
     def test_02_silent_video_still_exports_pdf(self):
         job = self.wait_job(self.submit(self.silent)["id"])

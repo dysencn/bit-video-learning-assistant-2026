@@ -31,6 +31,7 @@ class JobManager:
         self.jobs: dict[str, dict] = {}
         self.events: dict[str, threading.Event] = {}
         self.active = None
+        self.pptx_exporting: set[str] = set()
         self.last_save: dict[str, float] = {}
         self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="video")
         for path in self.root.glob("*/job.json"):
@@ -91,7 +92,7 @@ class JobManager:
             job = self.jobs.get(job_id)
             if not job:
                 raise FileNotFoundError("任务已删除")
-            if self.active == job_id or job["status"] in ACTIVE_STATES or job.get("summary", {}).get("status") in {"preparing", "generating", "saving"} or job.get("transcription", {}).get("status") in {"converting", "uploading", "submitting", "recognizing", "saving"}:
+            if self.active == job_id or job_id in self.pptx_exporting or job["status"] in ACTIVE_STATES or job.get("summary", {}).get("status") in {"preparing", "generating", "saving"} or job.get("transcription", {}).get("status") in {"converting", "uploading", "submitting", "recognizing", "saving"}:
                 raise BusyError("任务正在处理，请等待完成；视频提取也可先取消后再删除。")
             folder = self.root / job_id
             # Never recursively remove a symlink/junction or a path outside jobs/.
@@ -103,6 +104,42 @@ class JobManager:
             self.jobs.pop(job_id)
             self.events.pop(job_id, None)
             self.last_save.pop(job_id, None)
+
+    def export_pptx(self, job_id: str) -> Path:
+        from .pptx_export import create_pptx
+
+        with self.lock:
+            job = self.jobs.get(job_id)
+            if not job:
+                raise FileNotFoundError("任务已删除")
+            if job["status"] != "completed":
+                raise BusyError("请先完成本地预处理，再导出 PPTX。")
+            if job_id in self.pptx_exporting:
+                raise BusyError("正在导出 PPTX，请稍后再试。")
+            folder = self.root / job_id
+            destination = folder / "slides.pptx"
+            if destination.is_file():
+                return destination
+            pages = (job.get("result") or {}).get("pages", [])
+            if not pages:
+                raise ValueError("没有可导出的课件图片，请重新进行本地预处理。")
+            # Use the saved page order, never directory enumeration or caller-provided paths.
+            images = []
+            for page in pages:
+                number = page.get("number")
+                if type(number) is not int or number < 1:
+                    raise ValueError("课件页码无效，请重新进行本地预处理。")
+                image = folder / "slides" / f"slide-{number:04d}.jpg"
+                if image.resolve().parent != (folder / "slides").resolve() or not image.is_file():
+                    raise FileNotFoundError("课件图片已被移走或删除，请重新进行本地预处理。")
+                images.append(image)
+            self.pptx_exporting.add(job_id)
+        try:
+            create_pptx(images, destination)
+            return destination
+        finally:
+            with self.lock:
+                self.pptx_exporting.discard(job_id)
 
     def fail_upload(self, job_id: str, message: str):
         with self.lock:

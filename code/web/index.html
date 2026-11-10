@@ -41,9 +41,11 @@
                 <a class="pdf-action" id="pdf-download" href="#" download aria-label="保存课件 PDF">保存 ↓</a>
               </div>
             </div>
+            <button type="button" class="download-link" id="pptx-export"><span><b>课件 PPTX</b><small>每页一张原图，可用 PowerPoint / WPS 打开</small></span><span id="pptx-export-label">导出 ↓</span></button>
             <a class="download-link" id="audio-download" href="#" download><span><b>课程音频 MP3</b><small>可独立播放，方便回听</small></span><span>保存 ↓</span></a>
             <a class="download-link" id="zip-download" href="#" download><span><b>全部课件 JPG</b><small>图片压缩包，保留清晰原图</small></span><span>保存 ↓</span></a>
           </div>
+          <div id="pptx-status" hidden role="status"><progress id="pptx-progress" aria-label="正在导出 PPTX"></progress><p id="pptx-message"></p></div>
           <p class="save-note">保存位置由浏览器决定；可在浏览器下载设置中开启“每次询问保存位置”。</p>
         </div>
         <section id="transcription-section" class="summary-panel" hidden aria-labelledby="transcription-title">

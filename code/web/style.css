@@ -145,3 +145,84 @@ body:has(#platform)>header,body:has(#platform)>main{display:none}#platform{min-h
 #transcription-progress:indeterminate{appearance:none;border:0;border-radius:8px;background:#d7e6db;overflow:hidden}
 #transcription-progress:indeterminate::-webkit-progress-bar{background:linear-gradient(90deg,#d7e6db 20%,#16715d 50%,#d7e6db 80%);background-size:200% 100%;animation:summary-wait 1.5s linear infinite}
 @media(prefers-reduced-motion:reduce){#transcription-progress:indeterminate::-webkit-progress-bar{animation:none}}
+
+/* Teacher content management, assignments, gradebook and announcements */
+#platform .nav-bell{position:relative;display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:9px;color:#4d7d68;text-decoration:none;background:#f3f8f4;border:1px solid #e1ebe3}
+#platform .nav-bell:hover{background:#e7f2e9}
+#platform .nav-bell .ui-icon{width:18px;height:18px}
+#platform .nav-badge{position:absolute;right:-3px;top:-4px;min-width:16px;height:16px;padding:0 4px;border-radius:9px;background:#b65b35;color:#fff;font-size:9px;line-height:16px;text-align:center;font-weight:700}
+#platform .inline-select{display:inline-flex;align-items:center;gap:7px;margin:0;font-size:11px;color:#7b8d81;white-space:nowrap}
+#platform .inline-select select{min-width:150px;padding:8px 30px 8px 10px;font-size:12px;border-radius:8px}
+#platform .preview-banner{padding:9px 13px;border-radius:8px;background:#fff6df;color:#876127;font-size:12px;margin-bottom:16px;border:1px solid #f0dfb8}
+#platform .preview-note{padding:8px 11px;border-radius:7px;background:#f4f7f2;color:#71846f;font-size:11px;margin:10px 0}
+#platform .preview-quiz .question{opacity:.82}
+#platform .chapter-assignments{display:grid;gap:10px;margin:12px 0 18px}
+#platform .assignment-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:16px}
+#platform .assignment-card{display:flex;flex-direction:column;gap:9px;background:#fff;border:1px solid #e1e8e1;border-radius:13px;padding:20px}
+#platform .assignment-card.compact{padding:14px 17px;gap:6px;background:#f9fcf9}
+#platform .assignment-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px;color:#87978b}
+#platform .assignment-card h3{margin:0;font-size:17px;line-height:1.5}
+#platform .assignment-card p{margin:0;font-size:12px}
+#platform .assignment-card .actions{margin-top:auto}
+#platform .assignment-stats{display:flex;flex-wrap:wrap;gap:14px;font-size:11px;color:#7f8f83}
+#platform .assignment-stats b{display:block;font-size:16px;color:#2f6b50;font-variant-numeric:tabular-nums}
+#platform .assignment-manage-grid{display:grid;gap:14px}
+#platform .assignment-manage-card{background:#fff;border:1px solid #e1e8e1;border-radius:13px;padding:21px}
+#platform .assignment-manage-title{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;flex-wrap:wrap;margin:8px 0 12px}
+#platform .assignment-manage-title h3{margin:0;font-size:18px}
+#platform .assignment-form{margin-top:12px}
+#platform .assignment-form>label,#platform .editor-item form>label{display:block;margin-top:12px}
+#platform .assignment-detail-meta{display:flex;align-items:center;flex-wrap:wrap;gap:14px;font-size:12px;color:#788a7d;padding:12px 0;border-bottom:1px solid #edf1ec;margin-bottom:16px}
+#platform .assignment-timer{font-weight:700;color:#2f6b50;font-variant-numeric:tabular-nums}
+#platform .assignment-timer.expired{color:#a34a2f}
+#platform .editor-item{border:1px solid #e2e9e2;border-radius:10px;background:#fff;padding:14px 16px;margin-top:10px}
+#platform .editor-item-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+#platform .editor-item-head b{font-size:13px}
+#platform .editor-item-head small{display:block;font-size:11px;color:#8c9b8f;margin-top:3px}
+#platform .item-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:10px}
+#platform .ghost.small,#platform .secondary.small,#platform button.small{padding:6px 9px;font-size:11px;border-radius:7px}
+#platform .editor-item details>summary{cursor:pointer;list-style-position:outside}
+#platform .editor-item details>summary b{font-size:13px}
+#platform .editor-item details>summary small{display:block;font-size:11px;color:#8c9b8f;margin-top:3px}
+#platform .editor-item form{margin-top:14px;padding-top:14px;border-top:1px solid #eef2ed}
+#platform .editor-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+#platform .editor-fields label{margin:0}
+#platform .retired-list{margin-top:16px;border:1px dashed #d9e3da;border-radius:10px;padding:12px 14px;background:#fafbf9}
+#platform .retired-list>summary{cursor:pointer;font-size:12px;color:#7f8c80;font-weight:600}
+#platform .retired-item{opacity:.82;background:#fbfbfa}
+#platform .check-row{display:flex!important;align-items:center;gap:9px;margin:12px 0!important;font-size:12px!important;color:#677b6d!important;font-weight:400!important}
+#platform .platform-dialog{width:min(520px,calc(100vw - 36px));padding:24px;border-radius:15px;border:1px solid #dce7df;color:#20352f}
+#platform .platform-dialog::backdrop{background:#142c28aa}
+#platform .platform-dialog h2{font-size:20px;margin:0 0 10px}
+#platform .platform-dialog p{font-size:13px;line-height:1.8;color:#6c7d72}
+#platform .platform-dialog label{display:block;margin-top:14px;font-size:12px;color:#66796c}
+#platform .platform-dialog .actions{margin-top:20px;justify-content:flex-end}
+#platform .gradebook-toolbar{display:flex;align-items:flex-end;flex-wrap:wrap;gap:12px;margin-bottom:18px}
+#platform .gradebook-toolbar label{display:flex;flex-direction:column;gap:4px;margin:0;font-size:10px;color:#849487}
+#platform .gradebook-toolbar select{min-width:130px;padding:8px 30px 8px 10px;font-size:12px}
+#platform .gradebook-summary{grid-template-columns:repeat(5,minmax(0,1fr))}
+#platform .gradebook-summary .analytics-card{padding:17px 18px}
+#platform .gradebook-scroll{overflow:auto;max-height:72vh;border:1px solid #e1e8e1;border-radius:12px;background:#fff}
+#platform table.gradebook{min-width:760px;font-size:12px;border-collapse:separate;border-spacing:0}
+#platform table.gradebook th,#platform table.gradebook td{padding:10px 9px;border-bottom:1px solid #eef2ed;text-align:center;vertical-align:middle}
+#platform table.gradebook thead th{position:sticky;top:0;z-index:2;background:#f6faf6;color:#617669;font-size:11px;font-weight:600}
+#platform table.gradebook th.sticky{position:sticky;left:0;z-index:3;background:#f8fbf8;text-align:left;min-width:145px;box-shadow:1px 0 0 #e7eee8}
+#platform table.gradebook thead th.sticky{z-index:4}
+#platform table.gradebook th.sticky a{color:#2d6b50;font-weight:700;text-decoration:none}
+#platform table.gradebook th.sticky small{display:block;font-size:10px;color:#94a196;font-weight:400;margin-top:2px}
+#platform table.gradebook td b{font-size:13px;color:#2f6b50}
+#platform table.gradebook td.missing b{color:#aab5ad}
+#platform table.gradebook td small{display:block;font-size:9px;color:#96a298;margin-top:2px}
+#platform table.gradebook thead th small{display:block;font-size:9px;color:#8fa095;font-weight:400;margin-top:3px;max-width:130px;white-space:normal}
+#platform .late-tag{display:inline-block;margin-left:3px;padding:0 4px;border-radius:4px;background:#fff1df;color:#a2762f;font-size:9px}
+#platform .announcement-list{display:grid;gap:12px}
+#platform .announcement-card{background:#fff;border:1px solid #e1e8e1;border-radius:13px;padding:21px}
+#platform .announcement-card.unread{border-left:4px solid #2f7957;background:#fbfdfb}
+#platform .announcement-card.pinned{border-color:#e7d7b7}
+#platform .announcement-card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;font-size:11px;color:#8a988e}
+#platform .announcement-card h3{margin:9px 0 7px;font-size:17px}
+#platform .announcement-card p{font-size:13px;line-height:1.9;color:#6c7e72;overflow-wrap:anywhere}
+#platform .announcement-meta{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid #eef2ed;font-size:11px;color:#8a988e}
+#platform .announcement-meta .tag{margin:0}
+@media(max-width:900px){#platform .gradebook-summary{grid-template-columns:repeat(3,minmax(0,1fr))}#platform .editor-fields{grid-template-columns:1fr}}
+@media(max-width:620px){#platform .gradebook-summary{grid-template-columns:repeat(2,minmax(0,1fr))}#platform .assignment-card{padding:16px}#platform .assignment-manage-card{padding:16px}#platform .announcement-card{padding:16px}#platform .gradebook-toolbar label{flex:1;min-width:120px}#platform .gradebook-toolbar select{width:100%;min-width:0}#platform .inline-select{width:100%}#platform .inline-select select{width:100%}#platform .nav-bell{width:32px;height:32px}}

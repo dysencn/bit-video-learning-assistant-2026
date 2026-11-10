@@ -1,4 +1,5 @@
 import {esc} from "/static/ui.js";
+import {analysisLink} from "/static/analysis.js";
 
 const caseFields = () => `<div class="python-case"><label>测试输入<textarea class="case-input" maxlength="8192" placeholder="允许空输入"></textarea></label><label>预期输出<textarea class="case-output" maxlength="8192" placeholder="允许空输出"></textarea></label><button class="ghost remove-case" type="button">移除此用例</button></div>`;
 
@@ -91,6 +92,7 @@ export async function programmingPage(ctx, courseId, questionId) {
         progress.max = run.total; progress.value = run.completed;
         stage.textContent = `已完成 ${run.completed}/${run.total} 个用例 · 等待 ${Math.floor((Date.now()-began)/1000)} 秒`;
         result.innerHTML = resultsHtml(run);
+        if (run.submission_id) result.insertAdjacentHTML("beforeend", `<div class="actions">${analysisLink(link, run.submission_id)}</div>`);
         if (run.status === "completed") { try { sessionStorage.removeItem(key+":run"); } catch {} break; }
         if (Date.now()-began > 60000) throw new Error("等待时间较长，请刷新页面继续查看结果，不要重复提交。");
         await new Promise(resolve => setTimeout(resolve,350));

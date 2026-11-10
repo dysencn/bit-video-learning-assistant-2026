@@ -1,4 +1,6 @@
 import {teacherProgramming, bindTeacherProgramming, programmingPage, programmingRecord} from "/static/programming.js";
+import {quizPage} from "/static/ai-quiz.js";
+import {analysisLink, analysisPage} from "/static/analysis.js";
 import { esc, icon, number, radarCard } from "/static/ui.js";
 import { analyticsPage, personalProfilePage, reviewCenter } from "/static/learning-pages.js";
 import { mountVideo } from "/static/video.js";
@@ -10,7 +12,7 @@ const params = new URLSearchParams(location.search);
 let config, user;
 let majors = [];
 const majorName = id => majors.find(major => major.id === id)?.name || "未设置专业";
-const context = () => ({api, post, layout, root, tell, link, user, recordList, majorName});
+const context = () => ({api, post, layout, root, tell, link, user, config, recordList, majorName});
 let account = params.get("account") || "";
 let page = params.get("page") || (account ? "dashboard" : "login");
 const roleName = role => role === "teacher" ? "教师" : "学生";
@@ -53,7 +55,7 @@ function layout(content, title) {
 }
 function recordList(items, teacher = false) {
   if (!items.length) return '<div class="record-list empty">暂无练习提交记录。</div>';
-  return `<div class="record-list">${items.map(r => `<div class="record-row"><div><b>${teacher ? esc(r.student) + " · " : ""}${esc(r.course_name || r.course_id)}</b><small>${r.demo ? "演示记录 · " : ""}${date(r.submitted_at)} · ${r.type === "python" ? `Python 编程 · 用例通过 ${r.passed_cases}/${r.total_cases}` : `答对 ${r.correct_count}/${r.total} 题`}${r.chapter_title ? ` · ${esc(r.chapter_title)}` : ""}</small>${r.type === "python" ? programmingRecord(r) : ""}</div><strong class="score">${r.score} 分</strong></div>`).join("")}</div>`;
+  return `<div class="record-list">${items.map(r => `<div class="record-row"><div><b>${teacher ? esc(r.student) + " · " : ""}${esc(r.course_name || r.course_id)}</b><small>${r.demo ? "演示记录 · " : ""}${date(r.submitted_at)} · ${r.type === "ai_quiz" ? "AI 自测 · " : ""}${r.type === "python" ? `Python 编程 · 用例通过 ${r.passed_cases}/${r.total_cases}` : `答对 ${r.correct_count}/${r.total} 题`}${r.chapter_title ? ` · ${esc(r.chapter_title)}` : ""}</small>${r.type === "python" ? programmingRecord(r) : ""}</div><div class="record-actions"><strong class="score">${r.score} 分</strong>${analysisLink(link, r.id)}</div></div>`).join("")}</div>`;
 }
 function bindForm(selector, action) {
   const form = root.querySelector(selector);
@@ -175,6 +177,7 @@ async function learningPage() {
       try {
         const result = await post(`/api/courses/${course.id}/submissions`, {chapter_id: form.dataset.chapter, answers});
         form.querySelector(".quiz-result").innerHTML = `<div class="result"><h2>本章得分 ${result.score} 分</h2><p>答对 ${result.correct_count}/${result.total} 题，已保存到个人学习记录。</p>${result.details.map((d, i) => `<p>${d.correct ? "✓" : "✗"} ${i + 1}. ${esc(d.text)} · 正确答案：${esc(d.options[d.answer])}${d.explanation ? `<small class="answer-explanation">${esc(d.explanation)}</small>` : ""}</p>`).join("")}</div>`;
+        form.querySelector(".quiz-result").insertAdjacentHTML("beforeend", `<div class="actions">${analysisLink(link, result.id)}</div>`);
         form.querySelector(".quiz-result").scrollIntoView({behavior:"smooth", block:"nearest"});
       } catch (error) { tell(error.message); }
       finally { button.disabled = false; }
@@ -292,7 +295,7 @@ async function render() {
     initializeApiKey(config, user).catch(error => tell(error.message));
     return;
   }
-  const views = {programming:() => programmingPage(context(), params.get("course"), params.get("question")), dashboard, course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage};
+  const views = {analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), dashboard, course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage};
   if (!views[page]) throw new Error("页面不存在");
   await views[page]();
 }

@@ -92,6 +92,8 @@ class JobManager:
             job = self.jobs.get(job_id)
             if not job:
                 raise FileNotFoundError("任务已删除")
+            if job.get("quiz", {}).get("status") in {"preparing", "generating", "validating", "saving"}:
+                raise BusyError("AI 正在出题，请等待完成后再删除任务。")
             if self.active == job_id or job_id in self.pptx_exporting or job["status"] in ACTIVE_STATES or job.get("summary", {}).get("status") in {"preparing", "generating", "saving"} or job.get("transcription", {}).get("status") in {"converting", "uploading", "submitting", "recognizing", "saving"}:
                 raise BusyError("任务正在处理，请等待完成；视频提取也可先取消后再删除。")
             folder = self.root / job_id

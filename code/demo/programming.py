@@ -252,6 +252,7 @@ class ProgrammingManager:
                           "submitted_at": datetime.now(timezone.utc).isoformat(), "score": score,
                           "correct_count": int(passed == len(cases)), "total": 1,
                           "passed_cases": passed, "total_cases": len(cases), "results": list(run["results"]),
+                          "question_snapshot": {k:question[k] for k in ("title", "description", "examples")},
                           "details": [{"question_id": question["id"], "text": question["title"],
                                        "correct": passed == len(cases), "knowledge_point_name": "Python 编程"}]}
                 with self.store.lock:

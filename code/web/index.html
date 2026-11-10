@@ -70,6 +70,13 @@
           <button id="summary-key" class="key-settings" type="button">设置 / 更换 API 密钥</button>
           <div id="summary-status" hidden role="status" aria-live="polite"><p id="summary-message"></p><progress id="summary-progress" max="100" value="0" aria-label="课程总结生成进度"></progress><small id="summary-detail"></small></div>
         </section>
+        <section id="quiz-section" class="summary-panel" aria-labelledby="quiz-title">
+          <span class="eyebrow">DEEPSEEK · 课后练习</span><h3 id="quiz-title">根据课程材料一键出题</h3>
+          <p class="summary-note">沿用已保存总结的材料来源，生成 10 道单选题。校验通过后在新标签页作答，每题 10 分，提交后查看解析。</p>
+          <p id="quiz-guide" class="summary-guide">请先成功生成课程总结。</p>
+          <div class="summary-actions"><button id="quiz-generate" class="button primary" disabled>一键出题</button><a id="quiz-view" class="button secondary" href="#" target="_blank" rel="noopener" hidden>打开练习 ↗</a></div>
+          <div id="quiz-status" hidden role="status" aria-live="polite"><p id="quiz-message"></p><progress id="quiz-progress" max="100" value="0" aria-label="AI 出题进度"></progress><small id="quiz-detail"></small></div>
+        </section>
         <div id="error" class="error-box" hidden role="alert"></div>
       </div>
     </section>

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 import json
 import mimetypes
@@ -31,6 +32,8 @@ from . import summaries as summary_service
 from .transcriptions import TranscriptionManager, TranscriptionError
 from . import transcriptions as transcription_service
 from .programming import ProgrammingManager, validate_question, LIMITS as PYTHON_LIMITS
+from .quizzes import QuizManager, ACTIVE as QUIZ_ACTIVE
+from .analyses import AnalysisManager
 
 # Windows 下 Python 的 mimetypes 会把 .js 识别为 text/plain，浏览器会拒绝执行
 # 前端 module script，导致页面空白。这里强制修正为 application/javascript。
@@ -209,9 +212,11 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         jobs_root = data_dir or Path(os.environ.get("VIDEO_DEMO_DATA", ROOT / "data" / "jobs"))
         app.state.jobs = JobManager(jobs_root)
         app.state.summaries = SummaryManager(app.state.jobs)
+        app.state.quizzes = QuizManager(app.state.jobs, app.state.summaries)
         app.state.transcriptions = TranscriptionManager(app.state.jobs)
         app.state.accounts = AccountStore(jobs_root.parent / "accounts.json")
         app.state.learning = LearningStore(jobs_root.parent / "learning-platform.json")
+        app.state.analyses = AnalysisManager(jobs_root.parent / "analyses")
         app.state.programming = ProgrammingManager(app.state.learning)
         history_enabled = seed_demo_history if seed_demo_history is not None else os.environ.get("VIDEO_DEMO_SEED_HISTORY", "1") != "0"
         if history_enabled:
@@ -219,6 +224,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 app.state.learning.save()
         yield
         app.state.programming.close()
+        app.state.analyses.close()
+        app.state.quizzes.close()
         app.state.summaries.close()
         app.state.transcriptions.close()
         app.state.jobs.close()
@@ -251,7 +258,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
     @app.get("/api/config")
     async def config():
         return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.5.0", "local_only": True,
-                "features": {"course_audiences": True, "student_profiles": True, "python_programming": True}}
+                "features": {"course_audiences": True, "student_profiles": True, "python_programming": True, "ai_quiz": True, "ai_analysis": True}}
 
     async def json_object(request):
         try:
@@ -644,6 +651,58 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             store.save()
         return submission
 
+    def analysis_record(request, record_id):
+        user = request.app.state.accounts.current(request)
+        store = request.app.state.learning
+        with store.lock:
+            record = next((r for r in store.data["submissions"] + store.data.get("ai_quiz_submissions", [])
+                           if r["id"] == record_id), None)
+            course = store.course(record.get("course_id")) if record else None
+            allowed = record and (record["student_id"] == user["id"] if user["role"] == "student"
+                                  else record.get("type") != "ai_quiz" and course and course["teacher_id"] == user["id"])
+            if not allowed:
+                raise HTTPException(404, "提交记录不存在或无权查看")
+            return user, deepcopy(record), deepcopy(course or {})
+
+    @app.post("/api/learning-records/{record_id}/analysis", status_code=202)
+    async def start_analysis(request: Request, record_id: str):
+        user, record, course = analysis_record(request, record_id)
+        if await request.body() and await json_object(request):
+            raise HTTPException(400, "分析使用已保存的提交记录，无需上传题目或分数。")
+        try:
+            return request.app.state.analyses.start(user, record, course, api_key=request.app.state.accounts.api_key(request))
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+
+    @app.get("/api/learning-records/{record_id}/analysis")
+    async def analysis_state(request: Request, record_id: str):
+        user, record, course = analysis_record(request, record_id)
+        return {**request.app.state.analyses.get(user["id"], record_id),
+                "record": {"id":record_id, "title":record.get("course_name") or course.get("title", "历史练习"),
+                           "score":record["score"], "total":record["total"], "student":record["student"],
+                           "submitted_at":record["submitted_at"]}}
+
+    @app.get("/api/learning-records/{record_id}/analysis/{action}")
+    async def analysis_document(request: Request, record_id: str, action: str):
+        user, record, course = analysis_record(request, record_id)
+        if action not in {"view", "download"}: raise HTTPException(404, "文件不存在")
+        try:
+            html = request.app.state.analyses.html(user["id"], record_id)
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+        if action == "download":
+            filename = quote((record.get("course_name") or course.get("title", "练习")) + "-学习分析.html", safe="")
+            return HTMLResponse(html, headers={"Content-Disposition":f"attachment; filename=learning-analysis.html; filename*=UTF-8''{filename}",
+                                               "Content-Security-Policy":SUMMARY_CSP})
+        account = quote(user["id"], safe="")
+        encoded_record = quote(record_id, safe="")
+        toolbar = (f'<nav style="padding:16px;background:#edf5ef;color:#164b3e;font:15px sans-serif;display:flex;gap:24px;flex-wrap:wrap">'
+                   f'<a href="/api/learning-records/{encoded_record}/analysis/download?account={account}" download>下载分析 HTML</a>'
+                   f'<a href="/?page=records&amp;account={account}" target="_blank" rel="noopener">查看学习记录 ↗</a></nav>')
+        html = re.sub(r"(<body\b[^>]*>)", lambda match:match.group(0)+toolbar, html, count=1, flags=re.I)
+        policy = SUMMARY_CSP.replace("sandbox allow-same-origin;", "sandbox allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox;")
+        return HTMLResponse(html, headers={"Content-Security-Policy":policy})
+
     @app.get("/api/learning-records")
     async def learning_records(request: Request):
         user = request.app.state.accounts.current(request)
@@ -653,6 +712,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             courses = {c["id"]: c for c in store.data["courses"]}
             records = [r for r in store.data["submissions"] if
                        (r["course_id"] in own_courses if user["role"] == "teacher" else r["student_id"] == user["id"])]
+            if user["role"] == "student":
+                records += [r for r in store.data.get("ai_quiz_submissions", []) if r["student_id"] == user["id"]]
+                records.sort(key=lambda r:r["submitted_at"], reverse=True)
             result = []
             for r in records:
                 course = courses.get(r["course_id"], {})
@@ -660,7 +722,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 if r.get("chapter_id"):
                     chapter = next((c for c in course.get("chapters", []) if c["id"] == r["chapter_id"]), None)
                     chapter_title = chapter["title"] if chapter else ""
-                result.append({**r, "course_name": course.get("title", "已删除课程"), "chapter_title": chapter_title})
+                result.append({**r, "course_name": r.get("course_name") or course.get("title", "已删除课程"), "chapter_title": chapter_title})
             return result
 
     @app.get("/api/teacher/analytics")
@@ -772,7 +834,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         return [summary_options(request, job) for job in request.app.state.jobs.list(owner_id=user["id"])]
 
     def summary_options(request, job):
-        return {**job, "summary_options": request.app.state.summaries.options(job)}
+        return {**job, "summary_options": request.app.state.summaries.options(job),
+                "quiz_options": request.app.state.quizzes.options(job)}
 
     @app.post("/api/jobs", status_code=202)
     async def upload(request: Request, profile: str = "balanced"):
@@ -848,13 +911,15 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         find_job(request, job_id, owner_only=True)
         summaries, transcriptions, jobs, learning = (request.app.state.summaries, request.app.state.transcriptions,
                                                      request.app.state.jobs, request.app.state.learning)
-        with summaries.lock, transcriptions.lock, learning.lock, jobs.lock:
+        with summaries.lock, request.app.state.quizzes.lock, transcriptions.lock, learning.lock, jobs.lock:
             if summaries.active == job_id:
                 raise HTTPException(409, "总结正在生成，请等待完成后再删除任务")
             if transcriptions.active == job_id:
                 raise HTTPException(409, "录音正在转写，请等待完成后再删除任务")
             if job_id in jobs.pptx_exporting:
                 raise HTTPException(409, "PPTX 正在导出，请等待完成后再删除任务")
+            if jobs.jobs[job_id].get("quiz", {}).get("status") in QUIZ_ACTIVE:
+                raise HTTPException(409, "AI 正在出题，请等待完成后再删除任务")
             affected = [(course, course["resources"]) for course in learning.data["courses"]
                         if any(r.get("job_id") == job_id for r in course["resources"])]
             removed = sum(sum(r.get("job_id") == job_id for r in resources) for _, resources in affected)
@@ -912,6 +977,67 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             raise HTTPException(error.status_code, str(error)) from None
         return FileResponse(path, media_type="text/html" if kind == "html" else "text/plain",
                             filename=Path(job["filename"]).stem + "-课程录音文字稿." + kind)
+
+    @app.post("/api/jobs/{job_id}/quiz/submissions", status_code=201)
+    async def submit_ai_quiz(request: Request, job_id: str):
+        user = require_role(request, "student")
+        find_job(request, job_id, owner_only=True)
+        payload = await json_object(request)
+        try:
+            quiz = request.app.state.quizzes.read(job_id)
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+        if payload.get("quiz_id") != quiz["id"]:
+            raise HTTPException(409, "这套 AI 练习已更新，请刷新后作答，避免记录与题目不一致。")
+        answers = payload.get("answers")
+        if not isinstance(answers, dict) or set(answers) != {q["id"] for q in quiz["questions"]}:
+            raise HTTPException(400, "请完成全部题目后提交。")
+        details = []
+        for question in quiz["questions"]:
+            selected = answers[question["id"]]
+            if type(selected) is not int or not 0 <= selected < len(question["options"]):
+                raise HTTPException(400, "存在无效答案，请重新选择。")
+            details.append({"question_id":question["id"], "text":question["text"], "options":list(question["options"]),
+                            "answer":question["answer"], "selected":selected, "correct":selected == question["answer"],
+                            "explanation":question["explanation"], "knowledge_point_name":"AI 课程自测"})
+        correct = sum(d["correct"] for d in details)
+        record = {"id":uuid.uuid4().hex[:12], "type":"ai_quiz", "course_id":f"ai-video:{job_id}",
+                  "course_name":quiz["title"], "job_id":job_id, "quiz_id":quiz["id"], "source_mode":quiz["source_mode"],
+                  "student_id":user["id"], "student":user["name"], "submitted_at":LearningStore.now(),
+                  "total":len(details), "correct_count":correct, "score":round(correct/len(details)*100), "details":details}
+        store = request.app.state.learning
+        with store.lock:
+            records = store.data.setdefault("ai_quiz_submissions", [])
+            recent = next((r for r in records if r["student_id"] == user["id"] and r["quiz_id"] == quiz["id"]
+                           and _within_seconds(r["submitted_at"], record["submitted_at"], 5)
+                           and {d["question_id"]:d["selected"] for d in r["details"]} == answers), None)
+            if recent: return recent
+            records.insert(0, record)
+            try: store.save()
+            except OSError:
+                records.remove(record)
+                raise HTTPException(507, "无法保存作答记录，请检查磁盘空间和权限后重试。") from None
+        return record
+
+    @app.post("/api/jobs/{job_id}/quiz", status_code=202)
+    async def generate_quiz(request: Request, job_id: str):
+        find_job(request, job_id, owner_only=True)
+        if await request.body() and await json_object(request):
+            raise HTTPException(400, "出题来源由已保存的总结决定，无需提交额外参数。")
+        try:
+            return request.app.state.quizzes.start(job_id, api_key=request.app.state.accounts.api_key(request))
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+        except OSError:
+            raise HTTPException(507, "无法保存出题状态，请检查磁盘空间和目录权限。") from None
+
+    @app.get("/api/jobs/{job_id}/quiz")
+    async def get_quiz(request: Request, job_id: str):
+        find_job(request, job_id, owner_only=True)
+        try:
+            return request.app.state.quizzes.read(job_id)
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
 
     @app.post("/api/jobs/{job_id}/summary", status_code=202)
     async def generate_summary(request: Request, job_id: str):

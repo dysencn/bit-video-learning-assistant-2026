@@ -1,5 +1,6 @@
 import { ensureApiKey, openApiKeyDialog } from "/static/ai-key.js";
 import { ensureXfyunCredentials, openXfyunDialog } from "/static/xfyun-key.js";
+import {mountQuizControls, quizActive} from "/static/ai-quiz.js";
 
 export function mountVideo(config, user, fileUrl) {
 
@@ -16,6 +17,7 @@ const summaryActive = new Set(["preparing", "generating", "saving"]);
 const transcriptionActive = new Set(["converting", "uploading", "submitting", "recognizing", "saving"]);
 const stageOrder = {uploading: 0, queued: 1, probing: 1, scanning: 1, extracting: 2, pdf: 2, audio: 3, completed: 4};
 const stateNames = {uploading: "传入中", queued: "等待处理", running: "处理中", cancelling: "取消中", completed: "已完成", failed: "失败", cancelled: "已取消", interrupted: "已中断"};
+const quizControls = mountQuizControls({api, user, config, ensureApiKey, onJob:job => summaryView(job)});
 
 function formatSize(bytes) {
   return bytes > 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
@@ -136,6 +138,7 @@ function showSummaryGuide(mode) {
 }
 function summaryView(job) {
   currentJobData = job;
+  quizControls.update(job);
   const state = job?.summary || {};
   if (summaryModeJob !== job?.id) {
     summaryModeJob = job?.id;
@@ -169,6 +172,12 @@ function summaryView(job) {
   $("summary-regenerate").title = option.reason;
   $("summary-regenerate").textContent = `重新生成（${summaryModes[summaryMode]}）`;
   $("summary-delete").disabled = active || summarySubmitting;
+  if (quizControls.isActive()) {
+    for (const id of ["summary-generate", "summary-regenerate", "summary-delete"]) {
+      $(id).disabled = true;
+      $(id).title = "AI 正在出题，请等待完成后再修改总结。";
+    }
+  }
   $("summary-source").hidden = !available;
   $("summary-source").textContent = `当前保存的总结依据：${summaryModes[state.available_mode || state.mode || "slides"]}。重新生成成功后将替换当前总结。`;
   $("summary-status").hidden = !state.status;
@@ -342,6 +351,7 @@ async function refreshHistory(restore = false) {
     const available = job.summary?.available ?? job.summary?.status === "completed";
     const generating = summaryActive.has(job.summary?.status);
     const transcribing = transcriptionActive.has(job.transcription?.status);
+    const quizzing = quizActive.has(job.quiz?.status);
     const summaryName = generating ? "总结生成中" : available ? "已有总结" : "";
     const transcriptName = transcribing ? "录音转写中" : job.transcription?.available ? "已有文字稿" : "";
     const status = document.createElement("small"); status.textContent = `${stateNames[job.status] || job.status} ${summaryName ? "· " + summaryName : ""} ${transcriptName ? "· " + transcriptName : ""} · ${new Date(job.created_at).toLocaleString("zh-CN", {month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit"})}`;
@@ -362,10 +372,10 @@ async function refreshHistory(restore = false) {
       link.target = "_blank"; link.rel = "noopener"; actions.append(link);
     }
     const remove = document.createElement("button"); remove.className = "danger"; remove.textContent = "删除任务";
-    remove.disabled = activeStates.has(job.status) || generating || transcribing;
+    remove.disabled = activeStates.has(job.status) || generating || transcribing || quizzing;
     remove.title = remove.disabled ? "请等待处理完成，或先取消视频提取" : "删除任务记录及全部输出文件";
     remove.onclick = async () => {
-      if (!window.confirm(`确定删除“${job.filename}”？任务记录、JPG/PDF/PPTX/MP3、总结、文字稿及关联课程资源将一并删除，无法恢复。`)) return;
+      if (!window.confirm(`确定删除“${job.filename}”？任务记录、JPG/PDF/PPTX/MP3、总结、AI 练习、文字稿及关联课程资源将一并删除，无法恢复。`)) return;
       remove.disabled = true;
       try {
         await api(`/api/jobs/${job.id}`, {method: "DELETE"});

@@ -272,7 +272,7 @@ class DemoIntegrationTest(unittest.TestCase):
         qid = course["questions"][0]["id"]
         self.json_request(f"/api/courses/{cid}/publish", {})
         student_course = self.json_request(f"/api/courses/{cid}?role=teacher", account=DEMO_STUDENT)
-        self.assertNotIn("answer", student_course["questions"][0])
+        self.assertIn("answer", student_course["questions"][0])
         with self.request(f"/api/jobs/{job['id']}/files/pdf?account={DEMO_STUDENT}&preview=true", **{"X-Account-ID": ""}) as response:
             self.assertIn("inline", response.headers["Content-Disposition"])
             self.assertTrue(response.read().startswith(b"%PDF"))

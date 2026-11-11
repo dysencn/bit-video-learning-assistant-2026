@@ -13,18 +13,18 @@ export function teacherProgramming(course) {
     <details><summary>查看题意与用例</summary><p class="python-description">${esc(q.description)}</p>${q.test_cases.map((c, i) => `<p>测试 ${i + 1}</p><pre>输入：\n${esc(c.input)}\n预期输出：\n${esc(c.output)}</pre>`).join("")}</details>
     <form class="edit-programming" data-question="${esc(q.id)}"><label>编程题标题<input name="title" maxlength="100" value="${esc(q.title)}" required></label>
       <label>题目描述<textarea name="description" maxlength="5000" required>${esc(q.description)}</textarea></label>
-      <label>章节<select name="chapter_id">${chapterOptionsFor(q.chapter_id)}</select></label>
+      <label>章节<select name="chapter_id">${chapterOptionsFor(q.chapter_id)}</select></label><label>参考代码<textarea name="reference_code" maxlength="32768">${esc(q.reference_code || "")}</textarea></label><label>解题解析<textarea name="explanation" maxlength="3000">${esc(q.explanation || "")}</textarea></label>
       <div class="actions"><button class="secondary" type="submit">保存编程题</button>${isRetired ? `<button class="ghost" type="button" data-restore-programming="${esc(q.id)}">恢复题目</button>` : `<button class="ghost danger" type="button" data-retire-programming="${esc(q.id)}">停用题目</button>`}</div>
     </form>
     ${isRetired ? "" : `<div class="item-actions"><button class="ghost small" type="button" data-move-programming="${esc(q.id)}" data-direction="-1" ${index === 0 ? "disabled" : ""}>上移</button><button class="ghost small" type="button" data-move-programming="${esc(q.id)}" data-direction="1" ${index === active.length - 1 ? "disabled" : ""}>下移</button></div>`}
   </details></div>`;
-  return `<section class="editor"><h2>Python 编程题</h2><p class="muted">填写题意、公开示例和判题输入输出即可，无需参考代码。发布课程后学生可作答；已停用的题目不会下发给学生。</p>
+  return `<section class="editor"><h2>Python 编程题</h2><p class="muted">填写题意、公开示例、判题输入输出，并可补充学生可查看的参考代码与解析。发布课程后学生可作答；已停用的题目不会下发给学生。</p>
     <div class="editor-list">${active.map((q, index) => questionRow(q, index, false)).join("") || "暂无编程题"}</div>
     ${retired.length ? `<details class="retired-list"><summary>已停用编程题 ${retired.length} 道（学生端不显示）</summary>${retired.map(q => questionRow(q, 0, true)).join("")}</details>` : ""}
     <form id="programming-form"><label>章节<select name="chapter_id">${course.chapters.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join("")}</select></label>
     <label>编程题标题<input name="title" maxlength="100" required placeholder="例如：两个整数之和"></label>
     <label>题目描述<textarea name="description" maxlength="5000" required placeholder="说明输入格式、输出格式、取值范围，以及需要完成的任务"></textarea></label>
-    <div class="python-io"><label>示例输入<textarea name="example_input" maxlength="8192" placeholder="2 3"></textarea></label><label>示例输出<textarea name="example_output" maxlength="8192" placeholder="5"></textarea></label></div>
+    <label>参考代码（可选）<textarea name="reference_code" maxlength="32768"></textarea></label><label>解题解析（可选）<textarea name="explanation" maxlength="3000"></textarea></label><div class="python-io"><label>示例输入<textarea name="example_input" maxlength="8192" placeholder="2 3"></textarea></label><label>示例输出<textarea name="example_output" maxlength="8192" placeholder="5"></textarea></label></div>
     <p class="muted">该示例同时作为第一个判题用例；可再增加最多 9 个不公开的判题用例。每个用例最多运行 3 秒，内存 256 MB，输出 64 KB。</p>
     <div id="python-test-cases"></div><button class="secondary" id="add-python-case" type="button">增加判题用例</button>
     <div class="actions"><button type="submit" class="primary">添加编程题</button></div></form></section>`;
@@ -106,7 +106,7 @@ export async function programmingPage(ctx, courseId, questionId) {
   try { draft = sessionStorage.getItem(key) ?? draft; } catch {}
   layout(`<div class="page-heading"><div><span class="eyebrow">PYTHON PRACTICE</span><h1>${esc(question.title)}</h1><p class="muted">${esc(course.title)} · ${esc(course.chapters.find(c => c.id === question.chapter_id)?.title)}</p></div>${link("course", "返回课程", "secondary", {course:course.id})}</div>
     <div class="python-workspace"><section class="study-card"><h2>题目描述</h2><div class="python-description">${esc(question.description)}</div>${question.examples.map((sample,i) => `<h3>示例 ${i+1}</h3><div class="python-io"><div>输入<pre>${esc(sample.input || "（空输入）")}</pre></div><div>输出<pre>${esc(sample.output || "（空输出）")}</pre></div></div>`).join("")}
-    <p class="muted">每个用例：${question.limits.seconds} 秒 / ${question.limits.memory_mb} MB / 输出 64 KB。超限自动停止。</p><p class="muted">从标准输入读取，不要输出提示语。逐行比较输出，忽略行尾空格与末尾换行，其余内容必须一致。</p></section>
+    ${question.reference_code || question.explanation ? `<details class="study-note"><summary>查看参考代码与解析</summary><div>${question.reference_code ? `<pre><code>${esc(question.reference_code)}</code></pre>` : ""}<p>${esc(question.explanation || "暂无解析")}</p></div></details>` : ""}<p class="muted">每个用例：${question.limits.seconds} 秒 / ${question.limits.memory_mb} MB / 输出 64 KB。超限自动停止。</p><p class="muted">从标准输入读取，不要输出提示语。逐行比较输出，忽略行尾空格与末尾换行，其余内容必须一致。</p></section>
     <section class="study-card"><div class="section-title"><h2>Python 编辑器</h2><span class="tag">本地运行</span></div><label for="python-code" class="muted">Tab 插入四个空格 · 最多 32 KB · 当前标签页自动保留草稿</label><div class="python-editor"><pre id="python-lines" aria-hidden="true"></pre><textarea id="python-code" spellcheck="false" autocapitalize="off" autocomplete="off" wrap="off" aria-label="Python 代码">${esc(draft)}</textarea></div>
     <div class="actions"><button class="secondary" id="python-sample">运行示例</button><button class="primary" id="python-submit">提交判题</button></div>
     <div id="python-running" hidden><progress id="python-progress" max="1" value="0"></progress><p id="python-stage" role="status"></p></div><div id="python-result" aria-live="polite">${previous ? `<p class="muted">上次提交：${previous.score} 分，已载入上次代码。</p>` : ""}</div></section></div>`, question.title);

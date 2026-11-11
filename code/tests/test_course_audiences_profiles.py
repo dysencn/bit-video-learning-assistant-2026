@@ -99,7 +99,7 @@ class AudienceProfileHTTPTests(unittest.TestCase):
                 self.assertEqual(len(course["chapters"]), 3)
                 self.assertEqual(len(course["questions"]), 12)
                 self.assertTrue(all(resource.get("content") for resource in course["resources"]))
-                self.assertTrue(all("answer" not in question and "explanation" not in question for question in course["questions"]))
+                self.assertTrue(all("answer" in question and "explanation" in question for question in course["questions"]))
         self.error(404, "/api/courses/course-deep-learning", account="student-demo-1")
         self.error(404, "/api/courses/course-deep-learning/submissions", {"answers": {}}, "student-demo-3")
 

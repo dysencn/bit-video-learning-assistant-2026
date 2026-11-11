@@ -22,11 +22,6 @@ export const assignmentSubmissionText = item => item.attempts
   ? `本作业已提交 ${item.attempts} / ${item.max_attempts} 次`
   : `本作业尚未提交 · 最多 ${item.max_attempts} 次`;
 
-export function assignmentPracticeNote(item, link) {
-  if (!item.practice_count) return "";
-  return `<div class="assignment-practice-note"><b>相关题目自主练习 ${item.practice_count} 次</b><span>自主练习不计入本作业提交次数。</span>${link("learning-center", "查看练习记录", "text-link", {tab:"records", course:item.course_id, source:"self_practice"})}</div>`;
-}
-
 export const stateTag = student => student.not_started ? '<span class="tag neutral">待开始</span>'
   : student.needs_attention ? '<span class="tag attention">需关注</span>' : '<span class="tag published">正常</span>';
 

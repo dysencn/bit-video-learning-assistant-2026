@@ -1,4 +1,7 @@
-import {esc, icon, radarCard} from "/static/ui.js";
+import {esc, icon, radarCard, assignmentSubmissionText, assignmentPracticeNote} from "/static/ui.js";
+import {teachingCoursesPage, courseLabel} from "/static/teaching-courses.js";
+import {workspaceNav} from "/static/teacher-workspace.js";
+import {analysisLink} from "/static/analysis.js";
 
 const dateTime = value => value ? new Date(value).toLocaleString("zh-CN", {month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit"}) : "未设置";
 const dateLocal = value => {
@@ -17,7 +20,7 @@ const courseName = (courses, id) => courses.find(course => course.id === id)?.ti
 
 function courseSelector(courses, selected, id) {
   return `<label class="inline-select">课程<select id="${id}">${courses.map(course =>
-    `<option value="${esc(course.id)}" ${course.id === selected ? "selected" : ""}>${esc(course.title)}</option>`).join("")}</select></label>`;
+    `<option value="${esc(course.id)}" ${course.id === selected ? "selected" : ""}>${esc(courseLabel(course))}</option>`).join("")}</select></label>`;
 }
 
 function emptyPage(ctx, title, message, linkLabel = "返回工作台", view = "dashboard") {
@@ -27,97 +30,59 @@ function emptyPage(ctx, title, message, linkLabel = "返回工作台", view = "d
 
 // ------------------------------------------------------------------ assignments
 export async function assignmentsPage(ctx) {
+  if (ctx.user.role === "teacher" && !ctx.params.get("course")) return teachingCoursesPage(ctx);
   if (ctx.user.role === "teacher") return teacherAssignmentsPage(ctx);
   return studentAssignmentsPage(ctx);
 }
 
 async function teacherAssignmentsPage(ctx) {
-  const {api, post, patch, del, layout, root, tell, link, params, href, majorName} = ctx;
+  const {api, post, del, layout, root, tell, link, params, href, majorName} = ctx;
   const courses = (await api("/api/courses")).filter(course => course.status !== "archived");
-  if (!courses.length) return emptyPage(ctx, "还没有课程", "先创建并发布一门课程，再给学生布置作业。", "创建课程", "new-course");
+  if (!courses.length) return emptyPage(ctx, "还没有课程", "创建课程后即可准备题目和布置作业。", "创建课程", "new-course");
   const courseId = params.get("course") || courses[0].id;
-  if (!courses.some(course => course.id === courseId)) return emptyPage(ctx, "课程不存在", "请从工作台重新选择课程。");
-  const [course, assignments] = await Promise.all([
-    api(`/api/courses/${encodeURIComponent(courseId)}`),
-    api(`/api/courses/${encodeURIComponent(courseId)}/assignments`),
-  ]);
-  const chapterOptions = course.chapters.map(chapter => `<option value="${esc(chapter.id)}">${esc(chapter.title)}</option>`).join("");
-  const assignmentForm = (item = {}) => `<form class="assignment-form ${item.id ? "edit-assignment" : ""}" ${item.id ? `data-assignment="${esc(item.id)}"` : 'id="assignment-create"'}>
-    <div class="editor-fields"><label>作业标题<input name="title" maxlength="100" value="${esc(item.title || "")}" required placeholder="例如：第 2 章课后作业"></label>
-    <label>章节<select name="chapter_id">${course.chapters.map(chapter => `<option value="${esc(chapter.id)}" ${chapter.id === item.chapter_id ? "selected" : ""}>${esc(chapter.title)}</option>`).join("")}</select></label>
-    <label>成绩发布<select name="grade_release"><option value="immediate" ${item.grade_release !== "manual" ? "selected" : ""}>提交后立即显示</option><option value="manual" ${item.grade_release === "manual" ? "selected" : ""}>教师手动发布</option></select></label>
-    <label>状态<select name="status"><option value="draft" ${item.status !== "published" ? "selected" : ""}>草稿</option><option value="published" ${item.status === "published" ? "selected" : ""}>已发布</option></select></label></div>
-    <label>作业说明<textarea name="description" maxlength="2000" placeholder="可选：说明作业范围、提交要求">${esc(item.description || "")}</textarea></label>
-    <div class="editor-fields"><label>开放时间<input type="datetime-local" name="open_at" value="${dateLocal(item.open_at)}"></label><label>截止时间<input type="datetime-local" name="due_at" value="${dateLocal(item.due_at)}" required></label><label>允许迟交到<input type="datetime-local" name="close_at" value="${dateLocal(item.close_at)}"></label></div>
-    <div class="editor-fields"><label>最多提交次数<input type="number" name="max_attempts" min="1" max="10" value="${item.max_attempts || 1}"></label><label>作答时限（分钟，0 不限）<input type="number" name="time_limit_minutes" min="0" max="240" value="${item.time_limit_minutes || 0}"></label><label>迟交每天扣分（%）<input type="number" name="late_penalty_percent_per_day" min="0" max="100" value="${item.late_penalty_percent_per_day ?? 10}"></label><label>最多允许迟交天数<input type="number" name="late_max_days" min="0" max="30" value="${item.late_max_days || 3}"></label></div>
-    <label class="check-row"><input type="checkbox" name="allow_late" ${item.allow_late ? "checked" : ""}> 允许在截止后迟交（按天扣分）</label>
-    <div class="actions"><button class="secondary" type="submit">${item.id ? "保存作业设置" : "创建作业草稿"}</button>${item.id ? `<button class="ghost danger" type="button" data-delete-assignment="${esc(item.id)}">归档作业</button>` : ""}</div>
-  </form>`;
-  const rows = assignments.map(item => `<article class="assignment-manage-card">
-    <div class="assignment-card-head"><span class="tag ${stateClass(item.state)}">${stateLabel(item.state)}</span><small>${esc(item.chapter_title)} · ${item.student_count} 名学生</small></div>
-    <div class="assignment-manage-title"><h3>${esc(item.title)}</h3><div class="actions"><button class="ghost small" type="button" data-view-assignment="${esc(item.id)}">提交情况</button>${item.status === "draft" ? `<button class="secondary small" type="button" data-publish-assignment="${esc(item.id)}">发布作业</button>` : ""}${!item.grades_released ? `<button class="secondary small" type="button" data-release-assignment="${esc(item.id)}">发布成绩</button>` : ""}<button class="ghost small" type="button" data-remind-assignment="${esc(item.id)}">提醒未交</button></div></div>
-    <div class="assignment-stats"><span><b>${item.submitted_count}</b>已交</span><span><b>${item.missing_count}</b>未交</span><span><b>${score(item.average_score)}</b>平均分</span><span><b>${item.late_count}</b>迟交</span><span><b>${item.max_attempts}</b>次上限</span></div>
-    <p class="muted">截止 ${dateTime(item.due_at)} · ${item.grade_release === "manual" ? (item.grades_released ? "成绩已发布" : "成绩待发布") : "提交后立即显示成绩"}${item.time_limit_minutes ? ` · 限时 ${item.time_limit_minutes} 分钟` : ""}</p>
-    <details><summary>编辑作业设置</summary>${assignmentForm(item)}</details>
-    ${item.missing_students?.length ? `<details><summary>未交名单（${item.missing_count}）</summary><p class="muted">${item.missing_students.map(student => esc(student.name)).join("、")}</p></details>` : ""}
+  if (!courses.some(course => course.id === courseId)) throw new Error("课程不存在或已归档");
+  const [course, assignments] = await Promise.all([api(`/api/courses/${courseId}`), api(`/api/courses/${courseId}/assignments`)]);
+  const questionCount = item => item.question_ids?.length ? course.questions.filter(q => q.status !== "retired" && item.question_ids.includes(q.id)).length : course.questions.filter(q => q.status !== "retired" && q.chapter_id === item.chapter_id).length;
+  const counts = [[assignments.filter(a => a.status === "draft").length, "草稿"], [assignments.filter(a => ["open", "late"].includes(a.state)).length, "进行中"], [assignments.filter(a => a.state === "closed").length, "已截止"]];
+  const rows = assignments.map(item => `<article class="assignment-manage-card" data-assignment-state="${esc(item.status === "draft" ? "draft" : ["open", "late"].includes(item.state) ? "open" : "other")}">
+    <div class="assignment-card-head"><span class="tag ${stateClass(item.state)}">${stateLabel(item.state)}</span><small>${esc(item.chapter_title)} · ${questionCount(item)} 道单选题</small></div>
+    <h3>${esc(item.title)}</h3><p class="muted">截止 ${dateTime(item.due_at)} · ${item.grade_release === "manual" ? (item.grades_released ? "成绩已发布" : "成绩待发布") : "提交后显示成绩"}</p>
+    <div class="assignment-stats"><span><b>${item.submitted_count}</b>已交</span><span><b>${item.missing_count}</b>未交</span><span><b>${score(item.average_score)}</b>平均分</span><span><b>${item.late_count}</b>迟交</span></div>
+    <div class="actions"><a class="secondary" href="${esc(href("assignment-builder", {course:courseId, assignment:item.id}))}">编辑题目与规则</a><button class="ghost" data-view-assignment="${esc(item.id)}">提交情况 / AI 分析</button></div>
+    <details class="assignment-more"><summary>发布、提醒与其他操作</summary><div class="actions">${item.status === "draft" ? `<button class="secondary small" data-publish-assignment="${esc(item.id)}">发布作业</button>` : ""}${!item.grades_released ? `<button class="secondary small" data-release-assignment="${esc(item.id)}">发布成绩</button>` : ""}<button class="ghost small" data-remind-assignment="${esc(item.id)}">提醒未交</button><button class="ghost small danger" data-delete-assignment="${esc(item.id)}">归档作业</button></div></details>
   </article>`).join("");
-  layout(`<div class="page-heading"><div><span class="eyebrow">ASSIGNMENTS</span><h1>作业与截止时间</h1><p class="muted">按章节布置作业，设置截止时间、提交次数和迟交策略；成绩可立即公布或由教师统一发布。</p></div><div class="actions">${courseSelector(courses, courseId, "assignment-course")}${link("edit-course", "返回课程编辑", "secondary", {course:courseId})}</div></div>
-    <section><div class="section-title"><div><h2>${esc(course.title)}</h2><span class="muted">作业按章节出题；已停用题目不会下发</span></div><span class="muted">${assignments.length} 个作业</span></div><div class="assignment-manage-grid">${rows || '<div class="empty">还没有作业，先在下方创建第一份。</div>'}</div></section>
-    <section><div class="section-title"><h2>创建作业</h2><span class="muted">保存为草稿后可预览，再发布给学生</span></div><div class="editor"><p class="muted">作业目前按章节布置，提交后会进入成绩册；同一作业可限制最多提交次数。</p>${assignmentForm()}</div></section>
-    <section id="assignment-submissions"></section>`, "作业管理");
+  layout(`${workspaceNav(ctx, course, "assignments")}<div class="page-heading"><div><span class="eyebrow">ASSIGNMENTS</span><h1>作业管理</h1><p class="muted">一份作业，包含具体题目、提交规则和学生作答结果。</p></div><div class="actions">${courseSelector(courses, courseId, "assignment-course")}<a class="primary" href="${esc(href("assignment-builder", {course:courseId}))}">${icon("plus")}创建作业</a></div></div>
+    <div class="workflow-note"><div><b>创建作业：选题 / 新建题目 → 设置规则 → 预览与发布</b><p>手动出题可在创建过程中完成；AI 题目审核入库后，也能直接用于作业。</p></div>${link("teaching-ai", "AI 出题与分析", "secondary", {course:courseId})}</div>
+    <div class="assignment-list-toolbar"><div class="assignment-counts">${counts.map(([count,label]) => `<span><b>${count}</b>${label}</span>`).join("")}</div><label>显示<select id="assignment-status-filter"><option value="all">全部作业</option><option value="draft">草稿</option><option value="open">进行中</option><option value="other">其他状态</option></select></label></div>
+    <div class="assignment-manage-grid">${rows || `<div class="empty-state"><h2>创建第一份作业</h2><p class="muted">进入编辑器后，可从现有题库选题，也可以直接创建新题。</p><a class="primary" href="${esc(href("assignment-builder", {course:courseId}))}">创建作业</a></div>`}</div><section id="assignment-submissions"></section>`, "作业管理");
   root.querySelector("#assignment-course").onchange = event => { location.href = href("assignments", {course:event.target.value}); };
-  const reload = () => teacherAssignmentsPage(ctx).catch(error => tell(error.message));
-  root.querySelector("#assignment-create").onsubmit = async event => {
-    event.preventDefault();
-    const button = event.target.querySelector('[type="submit"]'); button.disabled = true;
-    try { await post(`/api/courses/${courseId}/assignments`, Object.fromEntries(new FormData(event.target))); await reload(); tell("作业草稿已创建"); }
-    catch (error) { tell(error.message); }
-    finally { button.disabled = false; }
-  };
-  root.querySelectorAll("form.edit-assignment").forEach(form => {
-    form.onsubmit = async event => {
-      event.preventDefault();
-      try { await patch(`/api/courses/${courseId}/assignments/${encodeURIComponent(form.dataset.assignment)}`, Object.fromEntries(new FormData(form))); await reload(); tell("作业设置已保存"); }
-      catch (error) { tell(error.message); }
-    };
-  });
-  root.querySelectorAll("[data-publish-assignment]").forEach(button => {
-    button.onclick = async () => {
-      try { await post(`/api/courses/${courseId}/assignments/${encodeURIComponent(button.dataset.publishAssignment)}/publish`); await reload(); tell("作业已发布"); }
-      catch (error) { tell(error.message); }
-    };
-  });
-  root.querySelectorAll("[data-release-assignment]").forEach(button => {
-    button.onclick = async () => {
-      if (!confirm("发布后学生将看到本次成绩。继续？")) return;
-      try { await post(`/api/courses/${courseId}/assignments/${encodeURIComponent(button.dataset.releaseAssignment)}/release`); await reload(); tell("成绩已发布"); }
-      catch (error) { tell(error.message); }
-    };
-  });
-  root.querySelectorAll("[data-remind-assignment]").forEach(button => {
-    button.onclick = async () => {
+  root.querySelector("#assignment-status-filter").onchange = event => root.querySelectorAll("[data-assignment-state]").forEach(card => { card.hidden = event.target.value !== "all" && card.dataset.assignmentState !== event.target.value; });
+  const reload = () => teacherAssignmentsPage(ctx);
+  for (const [attribute, action, message] of [["publish", "publish", "作业已发布"], ["release", "release", "成绩已发布"], ["remind", "remind", "提醒已发送"]]) {
+    root.querySelectorAll(`[data-${attribute}-assignment]`).forEach(button => { button.onclick = async () => {
+      button.disabled = true;
       try {
-        const reminder = await post(`/api/courses/${courseId}/assignments/${encodeURIComponent(button.dataset.remindAssignment)}/remind`, {});
-        tell(`已向 ${reminder.recipient_count} 名未交学生发送公告提醒`);
-      } catch (error) { tell(error.message); }
-    };
-  });
-  root.querySelectorAll("[data-delete-assignment]").forEach(button => {
-    button.onclick = async () => {
-      if (!confirm("归档后学生端不再显示该作业，已有提交记录仍保留。继续？")) return;
-      try { await del(`/api/courses/${courseId}/assignments/${encodeURIComponent(button.dataset.deleteAssignment)}`); await reload(); tell("作业已归档"); }
-      catch (error) { tell(error.message); }
-    };
-  });
-  const view = async assignmentId => {
+        const id = button.getAttribute(`data-${attribute}-assignment`);
+        const result = await post(`/api/courses/${courseId}/assignments/${encodeURIComponent(id)}/${action}`);
+        await reload(); tell(action === "remind" ? `已向 ${result.recipient_count} 名未交学生发送公告提醒` : message);
+      } catch (error) { tell(error.message); button.disabled = false; }
+    }; });
+  }
+  root.querySelectorAll("[data-delete-assignment]").forEach(button => { button.onclick = async () => {
+    if (!confirm("归档后学生端不再显示该作业，已有提交记录仍保留。继续？")) return;
+    try { await del(`/api/courses/${courseId}/assignments/${encodeURIComponent(button.dataset.deleteAssignment)}`); await reload(); tell("作业已归档"); }
+    catch (error) { tell(error.message); }
+  }; });
+  root.querySelectorAll("[data-view-assignment]").forEach(button => { button.onclick = async () => {
+    button.disabled = true;
     try {
-      const data = await api(`/api/courses/${courseId}/assignments/${encodeURIComponent(assignmentId)}/submissions`);
+      const data = await api(`/api/courses/${courseId}/assignments/${encodeURIComponent(button.dataset.viewAssignment)}/submissions`);
       const target = root.querySelector("#assignment-submissions");
-      target.innerHTML = `<div class="section-title"><div><span class="eyebrow">SUBMISSIONS</span><h2>${esc(data.assignment.title)} · 提交情况</h2></div><span class="muted">${data.assignment.submitted_count} 人已交 / ${data.assignment.student_count} 人</span></div><div class="table-scroll"><table class="gradebook"><thead><tr><th>学生</th><th>专业</th><th>状态</th><th>次数</th><th>最近得分</th><th>最高分</th><th>迟交</th><th>最近提交</th></tr></thead><tbody>${data.students.map(student => `<tr><th class="sticky">${esc(student.student)}</th><td>${esc(majorName(student.major_id))}</td><td><span class="tag ${student.status === "submitted" ? "published" : "neutral"}">${student.status === "submitted" ? "已交" : "未交"}</span></td><td>${student.attempts}</td><td>${score(student.latest_score)}</td><td>${score(student.best_score)}</td><td>${student.late ? "是" : "—"}</td><td>${student.last_submitted_at ? dateTime(student.last_submitted_at) : "—"}</td></tr>`).join("")}</tbody></table></div>`;
+      target.innerHTML = `<div class="section-title"><div><h2>${esc(data.assignment.title)} · 提交与分析</h2><p class="muted">${data.assignment.submitted_count} / ${data.assignment.student_count} 人已交。点击 AI 分析，查看该次作答的错因与建议。</p></div>${link("teaching-ai", "全部 AI 分析", "secondary", {course:courseId})}</div><div class="table-scroll"><table class="gradebook"><thead><tr><th>学生</th><th>专业</th><th>状态</th><th>次数</th><th>最近得分</th><th>最高分</th><th>最近提交</th><th>作答分析</th></tr></thead><tbody>${data.students.map(student => `<tr><th>${link("student-detail", esc(student.student), "text-link", {student:student.student_id, course:courseId})}</th><td>${esc(majorName(student.major_id))}</td><td>${student.status === "submitted" ? "已交" : "未交"}${student.late ? " · 迟交" : ""}</td><td>${student.attempts}</td><td>${score(student.latest_score)}</td><td>${score(student.best_score)}</td><td>${dateTime(student.last_submitted_at)}</td><td>${student.submission_id ? analysisLink(link, student.submission_id, courseId) : '<span class="muted">等待提交</span>'}</td></tr>`).join("")}</tbody></table></div>`;
       target.scrollIntoView({behavior:"smooth", block:"start"});
     } catch (error) { tell(error.message); }
-  };
-  root.querySelectorAll("[data-view-assignment]").forEach(button => { button.onclick = () => view(button.dataset.viewAssignment); });
+    finally { button.disabled = false; }
+  }; });
 }
 
 async function studentAssignmentsPage(ctx) {
@@ -125,7 +90,7 @@ async function studentAssignmentsPage(ctx) {
   const items = await api("/api/assignments");
   const pending = items.filter(item => item.can_start);
   const finished = items.filter(item => !item.can_start);
-  const card = item => `<article class="assignment-card"><div class="assignment-card-head"><span class="tag ${stateClass(displayState(item))}">${stateLabel(displayState(item))}</span><small>${esc(item.course_name)}</small></div><h3>${esc(item.title)}</h3><p class="muted">${esc(item.chapter_title)} · ${item.due_at ? `截止 ${dateTime(item.due_at)}` : "未设置截止时间"} · 已提交 ${item.attempts}/${item.max_attempts} 次</p><div class="assignment-stats"><span><b>${item.question_count}</b>道题</span><span><b>${item.time_limit_minutes || "不限"}</b>${item.time_limit_minutes ? "分钟" : "时限"}</span><span><b>${item.best_score !== null ? item.best_score : item.pending_release ? "待发布" : "—"}</b>最高分</span></div><div class="actions">${item.can_start ? link("assignment", item.attempts ? "继续作业" : "开始作业", "primary", {assignment:item.id}) : link("assignment", "查看结果/详情", "secondary", {assignment:item.id})}${item.pending_release ? '<span class="tag attention">成绩待教师发布</span>' : ""}</div></article>`;
+  const card = item => `<article class="assignment-card"><div class="assignment-card-head"><span class="tag ${stateClass(displayState(item))}">${stateLabel(displayState(item))}</span><small>${esc(item.course_name)}</small></div><h3>${esc(item.title)}</h3><p class="muted">${esc(item.chapter_title)} · ${item.due_at ? `截止 ${dateTime(item.due_at)}` : "未设置截止时间"} · ${assignmentSubmissionText(item)}</p>${assignmentPracticeNote(item, link)}<div class="assignment-stats"><span><b>${item.question_count}</b>道题</span><span><b>${item.time_limit_minutes || "不限"}</b>${item.time_limit_minutes ? "分钟" : "时限"}</span><span><b>${item.best_score !== null ? item.best_score : item.pending_release ? "待发布" : "—"}</b>最高分</span></div><div class="actions">${item.can_start ? link("assignment", item.attempts ? "继续作业" : "开始作业", "primary", {assignment:item.id}) : link("assignment", "查看结果/详情", "secondary", {assignment:item.id})}${item.pending_release ? '<span class="tag attention">成绩待教师发布</span>' : ""}</div></article>`;
   layout(`<div class="page-heading"><div><span class="eyebrow">MY ASSIGNMENTS</span><h1>我的作业</h1><p class="muted">按截止时间完成作业；迟交会按教师设置扣分，成绩是否立即显示由教师决定。</p></div><button class="ghost" id="refresh">${icon("refresh")}刷新作业</button></div>
     <section><div class="section-title"><div><h2>待完成</h2><span class="muted">${pending.length} 个作业</span></div></div><div class="assignment-grid">${pending.map(card).join("") || '<div class="empty">暂无待完成作业。</div>'}</div></section>
     <section><div class="section-title"><div><h2>其他作业</h2><span class="muted">已完成、已截止或尚未开放 · ${finished.length} 个</span></div></div><div class="assignment-grid">${finished.map(card).join("") || '<div class="empty">还没有其他作业。</div>'}</div></section>`, "我的作业");
@@ -156,7 +121,8 @@ export async function assignmentDetailPage(ctx) {
   const closed = ["closed", "upcoming"].includes(assignment.state) && !assignment.can_start;
   const questionHtml = questions.length ? questions.map((question, index) => `<fieldset class="question"><legend>${index + 1}. ${esc(question.text)}</legend>${question.options.map((option, optionIndex) => `<label class="option"><input type="radio" name="${esc(question.id)}" value="${optionIndex}" ${assignment.can_start ? "required" : "disabled"}> ${String.fromCharCode(65 + optionIndex)}. ${esc(option)}</label>`).join("")}</fieldset>`).join("") : '<p class="muted">本次作业暂时没有可用题目，请联系教师。</p>';
   layout(`<div class="learning-panel"><div class="page-heading"><div><span class="eyebrow">ASSIGNMENT</span><h1>${esc(assignment.title)}</h1><p class="muted">${esc(assignment.course_name)} · ${esc(assignment.chapter_title)} · ${assignment.due_at ? `截止 ${dateTime(assignment.due_at)}` : "未设置截止时间"}</p></div><div class="actions">${link("assignments", "返回作业列表", "secondary")}${link("course", "返回课程", "ghost", {course:course.id})}</div></div>
-    <div class="assignment-detail-meta"><span class="tag ${stateClass(displayState(assignment))}">${stateLabel(displayState(assignment))}</span><span>已提交 ${assignment.attempts}/${assignment.max_attempts} 次</span><span>${assignment.time_limit_minutes ? `限时 ${assignment.time_limit_minutes} 分钟` : "不限时"}</span>${assignment.allow_late ? `<span>迟交每天扣 ${assignment.late_penalty_percent_per_day}%</span>` : ""}${attempt?.expires_at ? `<span id="assignment-timer" class="assignment-timer"></span>` : ""}</div>
+    <div class="assignment-detail-meta"><span class="tag ${stateClass(displayState(assignment))}">${stateLabel(displayState(assignment))}</span><span id="assignment-attempts">${assignmentSubmissionText(assignment)}</span><span>${assignment.time_limit_minutes ? `限时 ${assignment.time_limit_minutes} 分钟` : "不限时"}</span>${assignment.allow_late ? `<span>迟交每天扣 ${assignment.late_penalty_percent_per_day}%</span>` : ""}${attempt?.expires_at ? `<span id="assignment-timer" class="assignment-timer"></span>` : ""}</div>
+    ${assignmentPracticeNote(assignment, link)}
     ${startError ? `<p class="warning">${esc(startError)}</p>` : ""}${resultText}
     ${assignment.can_start && questions.length ? `<form id="assignment-submit" class="study-card"><div class="questions">${questionHtml}</div><div class="actions"><button class="primary" type="submit">提交作业</button><span class="muted">提交后按教师设置显示成绩。</span></div><div id="assignment-result" role="status"></div></form>` : closed ? `<div class="empty">${assignment.state === "upcoming" ? "作业尚未开放，请在开放时间后进入。" : "作业已截止，不能再提交。"}</div>` : ""}
     ${assignment.description ? `<section class="study-note"><summary>${icon("book")}作业说明</summary><div><p>${esc(assignment.description).replace(/\n/g, "<br>")}</p></div></section>` : ""}
@@ -194,17 +160,14 @@ export async function assignmentDetailPage(ctx) {
       if (result.pending_release) {
         form.querySelector("#assignment-result").innerHTML = '<div class="result"><h2>已提交</h2><p>本次成绩由教师统一发布，请耐心等待。</p></div>';
       } else {
-        form.querySelector("#assignment-result").innerHTML = `<div class="result"><h2>本次得分 ${result.score} 分</h2><p>答对 ${result.correct_count}/${result.total} 题${result.late ? ` · 迟交扣分 ${result.penalty_percent}%` : ""}，已保存到学习记录。</p>${result.details.map((detail, index) => `<p>${detail.correct ? "✓" : "✗"} ${index + 1}. ${esc(detail.text)} · 正确答案：${esc(detail.options[detail.answer])}${detail.explanation ? `<small class="answer-explanation">${esc(detail.explanation)}</small>` : ""}</p>`).join("")}<div class="actions">${analysisLink(ctx, result.id)}</div></div>`;
+        form.querySelector("#assignment-result").innerHTML = `<div class="result"><h2>本次得分 ${result.score} 分</h2><p>答对 ${result.correct_count}/${result.total} 题${result.late ? ` · 迟交扣分 ${result.penalty_percent}%` : ""}，已保存到学习记录。</p>${result.details.map((detail, index) => `<p>${detail.correct ? "✓" : "✗"} ${index + 1}. ${esc(detail.text)} · 正确答案：${esc(detail.options[detail.answer])}${detail.explanation ? `<small class="answer-explanation">${esc(detail.explanation)}</small>` : ""}</p>`).join("")}<div class="actions">${analysisLink(link, result.id, course.id)}</div></div>`;
       }
       button.textContent = "已提交";
+      root.querySelector("#assignment-attempts").textContent = assignmentSubmissionText({...assignment, attempts:assignment.attempts + 1});
       form.querySelectorAll("input").forEach(input => { input.disabled = true; });
       form.querySelector("#assignment-result").scrollIntoView({behavior:"smooth", block:"nearest"});
     } catch (error) { tell(error.message); button.disabled = false; }
   };
-}
-
-function analysisLink(ctx, recordId) {
-  return ctx.link("analysis", "AI 分析 ↗", "secondary", {record:recordId, start:"1"});
 }
 
 // -------------------------------------------------------------------- gradebook
@@ -232,16 +195,16 @@ export async function gradebookPage(ctx) {
   const header = `<tr><th class="sticky">学生</th>${data.columns.map(column => `<th><span>${column.kind === "assignment" ? "作业" : "章节"}</span><small>${esc(column.title)}</small></th>`).join("")}<th>平均分</th><th>提交项</th></tr>`;
   const rows = data.students.map(row => `<tr><th class="sticky"><a href="${href("student-detail", {student:row.student_id, course:courseId})}" target="_blank" rel="noopener">${esc(row.student)}</a><small>${esc(majorName(row.major_id))}</small></th>${data.columns.map(column => {
     const cell = row.cells[column.id] || {};
-    return `<td class="${cell.submission_id ? "has-score" : "missing"}"><b>${score(cell.score)}</b>${cell.attempts > 1 ? `<small>${cell.attempts} 次</small>` : ""}${cell.late ? '<span class="late-tag">迟</span>' : ""}${cell.submitted_at ? `<small>${dateTime(cell.submitted_at)}</small>` : ""}</td>`;
+    return `<td class="${cell.submission_id ? "has-score" : "missing"}"><b>${score(cell.score)}</b>${cell.attempts > 1 ? `<small>${cell.attempts} 次</small>` : ""}${cell.late ? '<span class="late-tag">迟</span>' : ""}${cell.submitted_at ? `<small>${dateTime(cell.submitted_at)}</small>` : ""}${cell.submission_id ? analysisLink(link, cell.submission_id, courseId) : ""}</td>`;
   }).join("")}<td><b>${score(row.average_score)}</b></td><td>${row.submitted_count}</td></tr>`).join("");
   const chapterOptions = [["all", "全部章节"], ...course.chapters.map(chapter => [chapter.id, chapter.title])]
     .map(([value, label]) => `<option value="${esc(value)}" ${value === chapter ? "selected" : ""}>${esc(label)}</option>`).join("");
   const exportUrl = `/api/teacher/gradebook.csv?${query.toString()}`;
-  layout(`<div class="page-heading"><div><span class="eyebrow">GRADEBOOK</span><h1>成绩册</h1><p class="muted">按学生和作业/章节查看成绩，可切换最高分、最近一次或首次成绩，并导出 CSV。</p></div><div class="actions">${courseSelector(courses, courseId, "gradebook-course")}<a class="secondary" href="${fileUrl(exportUrl)}" download>${icon("arrow")}导出 CSV</a></div></div>
+  layout(`${workspaceNav(ctx, course, "gradebook")}<div class="page-heading"><div><span class="eyebrow">GRADEBOOK</span><h1>成绩册</h1><p class="muted">只汇总已发布作业的成绩，可切换最高分、最近一次或首次成绩，并导出 CSV。自主练习在学情总览中查看。</p></div><div class="actions">${courseSelector(courses, courseId, "gradebook-course")}<a class="secondary" href="${fileUrl(exportUrl)}" download>${icon("arrow")}导出 CSV</a></div></div>
     <div class="gradebook-toolbar"><label>取值方式<select id="gradebook-mode"><option value="latest" ${mode === "latest" ? "selected" : ""}>最近一次</option><option value="best" ${mode === "best" ? "selected" : ""}>最高分</option><option value="first" ${mode === "first" ? "selected" : ""}>第一次</option></select></label><label>学生<select id="gradebook-status"><option value="all" ${status === "all" ? "selected" : ""}>全部</option><option value="submitted" ${status === "submitted" ? "selected" : ""}>已有提交</option><option value="missing" ${status === "missing" ? "selected" : ""}>完全未交</option></select></label><label>章节<select id="gradebook-chapter">${chapterOptions}</select></label><button class="ghost" id="gradebook-refresh">${icon("refresh")}刷新</button></div>
     <section class="analytics-grid gradebook-summary">${cards}</section>
-    <section><div class="section-title"><div><h2>${esc(course.title)}</h2><span class="muted">${data.columns.length} 列 · ${data.students.length} 名学生 · 成绩按 ${mode === "best" ? "最高分" : mode === "first" ? "第一次" : "最近一次"} 统计</span></div></div>${data.columns.length ? `<div class="table-scroll gradebook-scroll"><table class="gradebook"><thead>${header}</thead><tbody>${rows || '<tr><td colspan="99" class="empty">没有符合筛选条件的学生。</td></tr>'}</tbody></table></div>` : '<div class="empty">该课程还没有可统计的作业或章节练习。</div>'}</section>
-    <p class="muted">成绩册覆盖课程面向专业的学生及已参与学生；同一格可点学生姓名查看个人详情。复习不计入成绩。</p>`, "成绩册");
+    <section><div class="section-title"><div><h2>${esc(course.title)}</h2><span class="muted">${data.columns.length} 列 · ${data.students.length} 名学生 · 成绩按 ${mode === "best" ? "最高分" : mode === "first" ? "第一次" : "最近一次"} 统计</span></div></div>${data.columns.length ? `<div class="table-scroll gradebook-scroll"><table class="gradebook"><thead>${header}</thead><tbody>${rows || '<tr><td colspan="99" class="empty">没有符合筛选条件的学生。</td></tr>'}</tbody></table></div>` : '<div class="empty">当前筛选范围没有已发布作业，因此没有作业成绩。</div>'}</section>
+    <p class="muted">成绩册仅统计已发布的作业。自主练习与错题复习不计入作业成绩；点学生姓名可查看完整学习记录。</p>`, "成绩册");
   root.querySelector("#gradebook-course").onchange = event => { location.href = href("gradebook", {course:event.target.value, mode, status, ...(chapter !== "all" ? {chapter} : {})}); };
   root.querySelector("#gradebook-mode").onchange = event => { location.href = href("gradebook", {course:courseId, mode:event.target.value, status, ...(chapter !== "all" ? {chapter} : {})}); };
   root.querySelector("#gradebook-status").onchange = event => { location.href = href("gradebook", {course:courseId, mode, status:event.target.value, ...(chapter !== "all" ? {chapter} : {})}); };
@@ -290,7 +253,7 @@ async function teacherAnnouncementsPage(ctx) {
     api(`/api/courses/${encodeURIComponent(courseId)}/announcements`),
   ]);
   const cards = announcements.map(item => `<article class="announcement-card ${item.pinned ? "pinned" : ""}"><div class="announcement-card-head"><span class="tag ${item.pinned ? "attention" : "neutral"}">${item.pinned ? "置顶" : "公告"}</span><small>${dateTime(item.created_at)}</small></div><h3>${esc(item.title)}</h3><p>${esc(item.body).replace(/\n/g, "<br>")}</p><div class="announcement-meta"><span>收件 ${item.recipient_count} 人</span><span>已读 ${item.read_count} 人</span><span>${item.audience === "all" ? "全体学生" : item.audience === "non_submitters" ? "未提交学生" : "需关注学生"}</span><button class="ghost small danger" type="button" data-delete-announcement="${esc(item.id)}">删除</button></div></article>`).join("");
-  layout(`<div class="page-heading"><div><span class="eyebrow">ANNOUNCEMENTS</span><h1>公告与提醒</h1><p class="muted">向全体、未提交或需关注的学生发送站内公告；学生端会显示未读提醒。</p></div><div class="actions">${courseSelector(courses, courseId, "announcement-course")}${link("edit-course", "返回课程编辑", "secondary", {course:courseId})}</div></div>
+  layout(`${workspaceNav(ctx, course, "announcements")}<div class="page-heading"><div><span class="eyebrow">ANNOUNCEMENTS</span><h1>公告与提醒</h1><p class="muted">向全体、未提交或需关注的学生发送站内公告；学生端会显示未读提醒。</p></div><div class="actions">${courseSelector(courses, courseId, "announcement-course")}${link("edit-course", "返回课程编辑", "secondary", {course:courseId})}</div></div>
     <section><div class="section-title"><div><h2>${esc(course.title)}</h2><span class="muted">${announcements.length} 条公告</span></div></div><div class="announcement-list">${cards || '<div class="empty">还没有公告。</div>'}</div></section>
     <section><div class="section-title"><h2>发布公告</h2><span class="muted">收件人由服务端按课程范围计算</span></div><div class="editor"><form id="announcement-create"><label>标题<input name="title" maxlength="100" required placeholder="例如：本周作业提醒"></label><label>内容<textarea name="body" maxlength="5000" required placeholder="写清时间、任务和需要学生做的事"></textarea></label><div class="editor-fields"><label>受众<select name="audience"><option value="all">全体学生</option><option value="non_submitters">未提交学生</option><option value="at_risk">需关注学生</option></select></label><label class="check-row"><input type="checkbox" name="pinned"> 置顶公告</label></div><div class="actions"><button class="secondary" type="submit">发布公告</button></div></form></div></section>`, "公告管理");
   root.querySelector("#announcement-course").onchange = event => { location.href = href("announcements", {course:event.target.value}); };

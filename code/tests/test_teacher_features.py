@@ -8,6 +8,8 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest.mock import patch
+import uuid
 from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
@@ -94,6 +96,104 @@ class TeacherFeatureTests(unittest.TestCase):
         return cid, question
 
     # ------------------------------------------------------------------ content
+    def ai_quiz(self, owner=TEACHER):
+        """Explicit offline fixture; no AI request or user data is involved."""
+        jobs = self.server.config.app.state.jobs
+        job = jobs.create("TEST_ONLY_teacher_material.mp4", "balanced", owner_id=owner)
+        jobs.update(job["id"], status="completed")
+        jobs.active = None
+        quiz = {"id": uuid.uuid4().hex, "source_mode": "slides", "source_summary": "a" * 64,
+                "title": "TEST ONLY 教师出题", "questions": [
+                    {"id": f"ai-q{i}", "chapter_id": "ai-practice", "knowledge_point_id": None,
+                     "text": f"TEST ONLY 第 {i} 题", "options": ["A | B", "C", "D", "E"],
+                     "answer": 0, "explanation": "TEST ONLY 课件第1张。"} for i in range(1, 11)]}
+        (jobs.root / job["id"] / "quiz.json").write_text(json.dumps(quiz), encoding="utf-8")
+        return job["id"], quiz
+
+    def test_ai_import_selected_questions_feed_assignment_and_hide_private_source(self):
+        cid, original = self.course()
+        course = self.request(f"/api/courses/{cid}")
+        job_id, quiz = self.ai_quiz()
+        payload = {"job_id": job_id, "quiz_id": quiz["id"], "chapter_id": original["chapter_id"],
+                   "question_ids": ["ai-q1", "ai-q3"]}
+        result = self.request(f"/api/courses/{cid}/questions/import-ai", payload)
+        self.assertEqual(len(result["imported_ids"]), 2)
+        self.assertEqual(len(result["course"]["questions"]), len(course["questions"]) + 2)
+        self.assertEqual(result["course"]["questions"][-1]["options"][0], "A | B")
+        student = self.request(f"/api/courses/{cid}", account=STUDENT)
+        for question in student["questions"]:
+            self.assertNotIn("answer", question)
+            self.assertNotIn("explanation", question)
+            self.assertNotIn("ai_source", question)
+        assignment = self.request(f"/api/courses/{cid}/assignments", {
+            "title": "AI 审核题作业", "chapter_id": original["chapter_id"],
+            "question_ids": result["imported_ids"], "due_at": _iso(timedelta(days=1))})
+        self.request(f"/api/courses/{cid}/assignments/{assignment['id']}/publish", {})
+        detail = self.request(f"/api/assignments/{assignment['id']}", account=STUDENT)
+        self.assertEqual(detail["assignment"]["question_count"], 2)
+        attempt = self.request(f"/api/assignments/{assignment['id']}/start", {}, account=STUDENT)
+        submission = self.request(f"/api/courses/{cid}/submissions", {
+            "assignment_id": assignment["id"], "attempt_id": attempt["id"],
+            "answers": {qid: 0 for qid in result["imported_ids"]}}, account=STUDENT)
+        self.assertEqual(submission["total"], 2)
+        self.assertEqual(submission["score"], 100)
+        overview = self.request(f"/api/courses/{cid}/assignments/{assignment['id']}/submissions")
+        row = next(s for s in overview["students"] if s["student_id"] == STUDENT)
+        self.assertEqual(row["submission_id"], submission["id"])
+
+    def test_ai_import_owner_scope_versions_and_input_validation(self):
+        cid, question = self.course()
+        job_id, quiz = self.ai_quiz()
+        endpoint = f"/api/courses/{cid}/questions/import-ai"
+        payload = {"job_id": job_id, "quiz_id": quiz["id"], "chapter_id": question["chapter_id"],
+                   "question_ids": ["ai-q1"]}
+        self.error(endpoint, payload, account=STUDENT, status=403)
+        self.error(endpoint, payload, account=OTHER_TEACHER, status=404)
+        other_job, other_quiz = self.ai_quiz(OTHER_TEACHER)
+        self.error(endpoint, {**payload, "job_id": other_job, "quiz_id": other_quiz["id"]}, status=404)
+        self.error(endpoint, {**payload, "quiz_id": "old-version"}, status=409)
+        for change in ({"question_ids": []}, {"question_ids": "ai-q1"},
+                       {"question_ids": ["ai-q1", "ai-q1"]}, {"question_ids": [1]},
+                       {"question_ids": ["unknown"]}, {"chapter_id": "other-course-chapter"},
+                       {"chapter_id": []}):
+            self.error(endpoint, {**payload, **change})
+        self.assertEqual(len(self.request(f"/api/courses/{cid}")["questions"]), 1)
+        self.request(f"/api/courses/{cid}", method="DELETE")
+        self.error(endpoint, payload, status=409)
+
+    def test_publish_requires_current_active_selected_questions(self):
+        cid, question = self.course()
+        assignment = self.request(f"/api/courses/{cid}/assignments", {
+            "title": "发布前检查题目", "chapter_id": question["chapter_id"],
+            "question_ids": [question["id"]], "due_at": _iso(timedelta(days=1))})
+        self.request(f"/api/courses/{cid}/questions/{question['id']}", method="DELETE")
+        self.error(f"/api/courses/{cid}/assignments/{assignment['id']}/publish", {})
+
+    def test_ai_import_duplicate_retry_disk_rollback_and_restart(self):
+        cid, question = self.course()
+        job_id, quiz = self.ai_quiz()
+        endpoint = f"/api/courses/{cid}/questions/import-ai"
+        payload = {"job_id": job_id, "quiz_id": quiz["id"], "chapter_id": question["chapter_id"],
+                   "question_ids": ["ai-q1"]}
+        first = self.request(endpoint, payload)
+        again = self.request(endpoint, payload)
+        self.assertEqual(again["imported_ids"], [])
+        self.assertEqual(again["existing_ids"], first["imported_ids"])
+        before = self.request(f"/api/courses/{cid}")
+        with patch.object(self.server.config.app.state.learning, "save", side_effect=OSError("TEST ONLY disk full")):
+            self.error(endpoint, {**payload, "question_ids": ["ai-q2", "ai-q3"]}, status=507)
+        self.assertEqual(self.request(f"/api/courses/{cid}"), before)
+        updated = self.request(f"/api/courses/{cid}/questions/{first['imported_ids'][0]}", {
+            "text": "长题干" * 150, "options": ["A | B" * 50, "第二项", "第三项", "第四项"],
+            "explanation": "解析" * 1200}, method="PATCH")
+        edited = updated["questions"][-1]
+        self.assertEqual(len(edited["text"]), 450)
+        self.assertEqual(edited["options"][0], "A | B" * 50)
+        self.assertEqual(len(edited["explanation"]), 2400)
+        self.stop_server()
+        self.start_server()
+        self.assertEqual(self.request(endpoint, payload)["existing_ids"], first["imported_ids"])
+
     def test_content_edit_order_retire_duplicate_archive_preview(self):
         cid, question = self.course()
         updated = self.request(f"/api/courses/{cid}", {"title": "修改后的课程", "description": "新简介"},
@@ -257,9 +357,44 @@ class TeacherFeatureTests(unittest.TestCase):
         self.assertGreater(reminder["recipient_count"], 0)
 
     # ------------------------------------------------------------------ gradebook
+    def test_student_assignment_progress_separates_matching_practice_and_formal_submission(self):
+        cid, question = self.course()
+        chapter = self.request(f"/api/courses/{cid}/chapters", {"title": "另一个章节"})
+        second = self.request(f"/api/courses/{cid}/questions", {
+            "text": "另一道题", "options": ["正确", "错误"], "answer": 0,
+            "chapter_id": chapter["id"]})["questions"][-1]
+        practice = self.request(f"/api/courses/{cid}/submissions", {
+            "chapter_id": question["chapter_id"], "answers": {question["id"]: 0}}, account=STUDENT)
+        self.request(f"/api/courses/{cid}/submissions", {
+            "chapter_id": question["chapter_id"], "answers": {question["id"]: 0}}, account=SOFT_STUDENT)
+        assignment = self.request(f"/api/courses/{cid}/assignments", {
+            "title": "对应题目作业", "question_ids": [question["id"]],
+            "due_at": _iso(timedelta(days=1)), "status": "published"})
+        other = self.request(f"/api/courses/{cid}/assignments", {
+            "title": "其他题目作业", "question_ids": [second["id"]],
+            "due_at": _iso(timedelta(days=1)), "status": "published"})
+        items = {item["id"]: item for item in self.request("/api/assignments", account=STUDENT)}
+        self.assertEqual((items[assignment["id"]]["attempts"], items[assignment["id"]]["practice_count"]), (0, 1))
+        self.assertEqual(items[other["id"]]["practice_count"], 0)
+        endpoint = f"/api/assignments/{assignment['id']}"
+        detail = self.request(endpoint, account=STUDENT)["assignment"]
+        self.assertEqual((detail["attempts"], detail["practice_count"]), (0, 1))
+        submission = self.request(f"/api/courses/{cid}/submissions", {
+            "assignment_id": assignment["id"], "answers": {question["id"]: 0}}, account=STUDENT)
+        detail = self.request(endpoint, account=STUDENT)["assignment"]
+        self.assertEqual((detail["attempts"], detail["practice_count"]), (1, 1))
+        self.assertEqual(detail["latest_submission_id"], submission["id"])
+        records = {record["id"]: record for record in self.request("/api/learning-records", account=STUDENT)}
+        self.assertEqual(records[practice["id"]]["source_type"], "self_practice")
+        self.assertEqual(records[submission["id"]]["source_type"], "assignment")
+
     def test_gradebook_csv_permissions_and_student_drilldown(self):
         cid, question = self.course()
-        self.request(f"/api/courses/{cid}/submissions", {"answers": {question["id"]: 0}}, account=STUDENT)
+        assignment = self.request(f"/api/courses/{cid}/assignments", {
+            "title": "成绩册作业", "chapter_id": question["chapter_id"],
+            "due_at": _iso(timedelta(days=1)), "status": "published"})
+        self.request(f"/api/courses/{cid}/submissions", {
+            "assignment_id": assignment["id"], "answers": {question["id"]: 0}}, account=STUDENT)
         gradebook = self.request(f"/api/teacher/gradebook?course_id={cid}&mode=best")
         self.assertTrue(gradebook["columns"])
         row = next(item for item in gradebook["students"] if item["student_id"] == STUDENT)
@@ -280,13 +415,41 @@ class TeacherFeatureTests(unittest.TestCase):
 
     def test_gradebook_filters_and_empty_course(self):
         cid, question = self.course()
-        self.request(f"/api/courses/{cid}/submissions", {"answers": {question["id"]: 0}}, account=STUDENT)
+        assignment = self.request(f"/api/courses/{cid}/assignments", {
+            "title": "成绩册作业", "chapter_id": question["chapter_id"],
+            "due_at": _iso(timedelta(days=1)), "status": "published"})
+        self.request(f"/api/courses/{cid}/submissions", {
+            "assignment_id": assignment["id"], "answers": {question["id"]: 0}}, account=STUDENT)
         only_missing = self.request(f"/api/teacher/gradebook?course_id={cid}&status=missing")
         self.assertNotIn(STUDENT, [row["student_id"] for row in only_missing["students"]])
         only_submitted = self.request(f"/api/teacher/gradebook?course_id={cid}&status=submitted")
         self.assertEqual([row["student_id"] for row in only_submitted["students"]], [STUDENT])
         self.error(f"/api/teacher/gradebook?course_id={cid}&mode=bad", status=400)
         self.error(f"/api/teacher/gradebook?course_id={cid}&chapter_id=missing", status=400)
+
+    def test_gradebook_has_no_grades_without_published_assignment(self):
+        cid, question = self.course()
+        practice = self.request(f"/api/courses/{cid}/submissions", {
+            "answers": {question["id"]: 0}}, account=STUDENT)
+        assignment = self.request(f"/api/courses/{cid}/assignments", {
+            "title": "草稿作业", "chapter_id": question["chapter_id"],
+            "due_at": _iso(timedelta(days=1))})
+        gradebook = self.request(f"/api/teacher/gradebook?course_id={cid}")
+        self.assertEqual(gradebook["columns"], [])
+        self.assertIsNone(gradebook["summary"]["average_score"])
+        self.assertEqual(gradebook["summary"]["submitted_students"], 0)
+        records = self.request("/api/learning-records", account=STUDENT)
+        record = next(item for item in records if item["id"] == practice["id"])
+        self.assertEqual(record["source_type"], "self_practice")
+        self.request(f"/api/courses/{cid}/assignments/{assignment['id']}/publish", {})
+        published = self.request(f"/api/teacher/gradebook?course_id={cid}")
+        self.assertEqual(len(published["columns"]), 1)
+        self.assertIsNone(published["summary"]["average_score"])
+        self.request(f"/api/courses/{cid}/submissions", {
+            "assignment_id": assignment["id"], "answers": {question["id"]: 0}}, account=STUDENT)
+        submitted = self.request(f"/api/teacher/gradebook?course_id={cid}")
+        self.assertEqual(submitted["summary"]["average_score"], 100)
+        self.assertTrue(all(column["kind"] == "assignment" for column in submitted["columns"]))
 
     # --------------------------------------------------------------- announcements
     def test_announcement_audience_read_and_permissions(self):

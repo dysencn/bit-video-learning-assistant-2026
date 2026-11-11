@@ -450,7 +450,7 @@ class DemoIntegrationTest(unittest.TestCase):
         majors = self.json_request("/api/majors")
         self.assertEqual([m["id"] for m in majors], ["m-soft", "m-ai", "m-cs"])
         for student in [DEMO_STUDENT, "student-demo-2"]:
-            self.assertIn("course-demo", [c["id"] for c in self.json_request("/api/courses", account=student)])
+            self.assertIn("course-demo" if student == DEMO_STUDENT else "course-python-02", [c["id"] for c in self.json_request("/api/courses", account=student)])
         self.assertNotIn("course-deep-learning", [c["id"] for c in self.json_request("/api/courses", account=DEMO_STUDENT)])
         self.assertIn("course-deep-learning", [c["id"] for c in self.json_request("/api/courses", account="student-demo-2")])
         # Any teacher may teach across majors, but only students in the course audience may enter.

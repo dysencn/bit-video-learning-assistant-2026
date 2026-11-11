@@ -72,6 +72,7 @@ def teacher_analytics(courses, submissions, students):
                 })
         stats.append({
             "course_id": course["id"], "title": course["title"], "status": course["status"],
+            "teaching_class": course.get("teaching_class", ""), "course_code": course.get("course_code", ""),
             "major_ids": course["major_ids"], "participants": len({item["student_id"] for item in items}),
             "submission_count": len(items),
             "average_score": round(sum(item["score"] for item in items) / len(items)) if items else None,

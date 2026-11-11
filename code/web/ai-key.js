@@ -52,6 +52,11 @@ export async function ensureApiKey() {
 
 export async function initializeApiKey(localConfig, account, {prompt = true} = {}) {
   config = localConfig; user = account;
+  if (dialog?.isConnected) {
+    const state = await keyRequest();
+    if (prompt && !state.configured) await openApiKeyDialog();
+    return;
+  }
   dialog = document.createElement("dialog");
   dialog.id = "api-key-dialog";
   dialog.setAttribute("aria-labelledby", "api-key-title");

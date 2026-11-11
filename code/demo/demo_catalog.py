@@ -165,7 +165,7 @@ def upgrade_catalog(data):
                         item.setdefault("explanation", source["explanation"])
         for field in ("category", "demo", "duration", "level"):
             course.setdefault(field, sample[field])
-        if course["id"] == "course-demo":
+        if course["id"] == "course-demo" and data.get("demo_teaching_classes_version", 0) < 2:
             course["major_ids"] = list(sample["major_ids"])
             course.pop("major_id", None)
     data["demo_catalog_version"] = 2
@@ -193,7 +193,7 @@ def upgrade_programming_samples(data):
 
 def seed_activity(data, accounts):
     """Persist clearly tagged sample activity only for untouched built-in demo students."""
-    if data.get("demo_activity_version", 0) >= 1:
+    if data.get("demo_activity_version", 0) >= 2 and data.get("demo_assignment_version", 0) >= 1:
         return False
     courses = {course["id"]: course for course in data["courses"]}
     now = datetime.now(timezone.utc)
@@ -207,8 +207,8 @@ def seed_activity(data, accounts):
         number = next((n for n in plans if student["id"] == f"student-demo-{n}"), None)
         if number is None:
             continue
-        chosen = [courses[cid] for cid in ("course-demo", "course-deep-learning")
-                  if cid in courses and student.get("major_id") in courses[cid]["major_ids"]]
+        chosen = [course for course in courses.values() if course.get("demo") and course.get("status") == "published"
+                  and student.get("major_id") in course["major_ids"]]
         for course in chosen:
             points = {point["id"]: point["name"] for point in course["knowledge_points"]}
             for ci, correct_count in enumerate(plans[number]):
@@ -250,5 +250,7 @@ def seed_activity(data, accounts):
                     "details": details, "demo": True,
                 })
     data["submissions"].sort(key=lambda record: record["submitted_at"], reverse=True)
-    data["demo_activity_version"] = 1
+    from .demo_assignments import prepare_demo_assignments
+    prepare_demo_assignments(data, accounts)
+    data["demo_activity_version"] = 2
     return True

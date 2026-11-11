@@ -92,8 +92,11 @@ class TeacherAnalyticsTests(unittest.TestCase):
 
     def test_statistics_use_owned_courses_and_course_audiences(self):
         teacher = self.login("teacher1", "Teach123!")
-        # Narrow this fixture's pre-existing Python course, independently of teacher affiliation.
-        self.request("/api/courses/course-demo/audience", {"major_ids": ["m-soft"]})
+        # Keep this statistics fixture limited to one audience across all built-in classes.
+        baseline = self.request("/api/courses")
+        baseline_titles = {course["title"] for course in baseline}
+        for item in baseline:
+            self.request(f"/api/courses/{item['id']}/audience", {"major_ids": ["m-soft"]})
         student_zero = self.login("student1", "Learn123!")
         student_low = self.register("analytics_low")
         student_pass = self.register("analytics_pass")
@@ -118,7 +121,7 @@ class TeacherAnalyticsTests(unittest.TestCase):
         self.assertEqual(overview["pass_rate"], 33)
         self.assertEqual(overview["attention_count"], 5)
         self.assertEqual({c["title"] for c in result["courses"]},
-                         {"Python 程序设计入门", "Owned published course", "Owned draft"})
+                         baseline_titles | {"Owned published course", "Owned draft"})
         self.assertNotIn(other_student, [s["student_id"] for s in result["students"]])
         self.assertEqual({s["student_id"] for s in result["students"] if s["not_started"]},
                          {student_idle, "student-demo-4", "student-demo-8"})
@@ -136,7 +139,7 @@ class TeacherAnalyticsTests(unittest.TestCase):
         other_result = self.request("/api/teacher/analytics", account=other_teacher)
         self.assertEqual(other_result["overview"]["submission_count"], 1)
         self.assertEqual(other_result["overview"]["average_score"], 100)
-        self.assertEqual({s["student_id"] for s in other_result["students"]}, {other_student, "student-demo-5", "student-demo-7"})
+        self.assertEqual({s["student_id"] for s in other_result["students"]}, {other_student, "student-demo-5", "student-demo-7", "student-demo-3", "student-demo-6"})
 
     def test_empty_group_has_no_fabricated_scores(self):
         teacher = self.register("analytics_empty", role="teacher", major="m-cs")

@@ -28,6 +28,8 @@ from starlette.concurrency import run_in_threadpool
 from .jobs import BusyError, JobManager
 from .media import PROFILES
 from .demo_catalog import demo_courses, upgrade_catalog, upgrade_programming_samples, seed_activity
+from .teaching_catalog import upgrade_teaching_samples
+from .demo_assignments import upgrade_assignment_titles
 from .learning_metrics import accepts_student, build_profiles, teacher_analytics as aggregate_teacher
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 from .summaries import SummaryManager, SummaryError, SUMMARY_CSP
@@ -234,6 +236,14 @@ class LearningStore:
         if path.is_file():
             # Invalid existing data must fail visibly, never be replaced by demo defaults.
             self.data.update(json.loads(path.read_text(encoding="utf-8")))
+            if self.data.get("demo_teaching_classes_version", 0) < 2:
+                backup = path.with_name(f"{path.stem}.before-professional-classes.json")
+                if not backup.exists():
+                    shutil.copy2(path, backup)
+            if not self.data.get("demo_teaching_classes_version"):
+                backup = path.with_name(f"{path.stem}.before-teaching-classes.json")
+                if not backup.exists():
+                    shutil.copy2(path, backup)
             if not self.data.get("course_audiences_version"):
                 backup = path.with_name(f"{path.stem}.before-v0.5.json")
                 if not backup.exists():
@@ -313,6 +323,10 @@ class LearningStore:
             migrated = True
         if upgrade_programming_samples(self.data):
             migrated = True
+        if upgrade_teaching_samples(self.data):
+            migrated = True
+        if upgrade_assignment_titles(self.data):
+            migrated = True
         if self.data.get("course_audiences_version") != 1:
             self.data["course_audiences_version"] = 1
             migrated = True
@@ -344,6 +358,7 @@ class LearningStore:
             for question in result["questions"]:
                 question.pop("answer", None)
                 question.pop("explanation", None)
+                question.pop("ai_source", None)
         return result
 
     def courses(self, include_drafts=False, include_answers=False):
@@ -409,7 +424,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.6.0", "local_only": True,
                 "features": {"course_audiences": True, "student_profiles": True, "python_programming": True,
                              "ai_quiz": True, "ai_analysis": True, "teacher_content": True,
-                             "assignments": True, "gradebook": True, "announcements": True}}
+                             "assignments": True, "gradebook": True, "announcements": True,
+                             "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
+                             "assignment_practice_progress": True}}
 
     async def json_object(request):
         try:
@@ -538,7 +555,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
     async def update_course(request: Request, course_id: str):
         course = editable_course(request, course_id)
         payload = await json_object(request)
-        limits = {"title": 80, "description": 300, "category": 40, "level": 40, "duration": 40}
+        limits = {"title": 80, "description": 300, "category": 40, "level": 40, "duration": 40,
+                  "course_code": 40, "teaching_class": 60, "term": 40}
         with request.app.state.learning.lock:
             for field, limit in limits.items():
                 if field not in payload:
@@ -586,6 +604,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             clone = deepcopy(source)
             clone["id"] = uuid.uuid4().hex[:12]
             clone["title"] = (source["title"] + "（副本）")[:80]
+            clone["course_code"] = ""
             clone["status"] = "draft"
             clone["demo"] = False
             clone["created_at"] = now
@@ -639,11 +658,14 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         selected = payload.get("major_ids")
         # Old clients may still submit a single major_id; teachers are no longer restricted by it.
         if "major_ids" not in payload:
-            selected = [payload["major_id"]] if payload.get("major_id") else valid
+            selected = [payload["major_id"]] if payload.get("major_id") else valid[:1]
         if (not isinstance(selected, list) or not selected
                 or any(not isinstance(mid, str) or mid not in valid for mid in selected)):
             raise HTTPException(400, "请至少选择一个有效的学生专业")
-        return list(dict.fromkeys(selected))
+        selected = list(dict.fromkeys(selected))
+        if len(selected) != 1:
+            raise HTTPException(400, "每个教学班只能对应一个学生专业，请为其他专业另建教学班")
+        return selected
 
     @app.post("/api/courses")
     async def create_course(request: Request):
@@ -659,6 +681,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                       "teacher": user["name"], "teacher_id": user["id"], "status": "draft",
                       "created_at": LearningStore.now(), "updated_at": LearningStore.now(),
                       "major_ids": major_ids,
+                      "course_code": str(payload.get("course_code", "")).strip()[:40],
+                      "teaching_class": str(payload.get("teaching_class", "")).strip()[:60],
+                      "term": str(payload.get("term", "")).strip()[:40],
                       "chapters": [{"id": uuid.uuid4().hex[:10], "title": "第 1 章", "order": 1}],
                       "resources": [], "questions": []}
             request.app.state.learning.data["courses"].insert(0, course)
@@ -862,13 +887,63 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             chapter_id = str(payload.get("chapter_id", "")).strip() or course["chapters"][0]["id"]
             if chapter_id not in {c["id"] for c in course["chapters"]}:
                 raise HTTPException(400, "章节不存在")
-            course["questions"].append({"id": uuid.uuid4().hex[:10], "text": text[:300],
-                                        "options": [str(item).strip()[:100] for item in options[:4]], "answer": answer,
+            course["questions"].append({"id": uuid.uuid4().hex[:10], "text": text[:3000],
+                                        "options": [str(item).strip()[:1000] for item in options[:4]], "answer": answer,
                                         "knowledge_point_id": knowledge_point_id, "chapter_id": chapter_id,
-                                        "explanation": str(payload.get("explanation", "")).strip()[:2000]})
+                                        "explanation": str(payload.get("explanation", "")).strip()[:3000]})
             course["updated_at"] = LearningStore.now()
             request.app.state.learning.save()
         return request.app.state.learning.public_course(course, include_answers=True)
+
+    @app.post("/api/courses/{course_id}/questions/import-ai")
+    async def import_ai_questions(request: Request, course_id: str):
+        """Copy teacher-reviewed private AI questions into the owned course bank."""
+        course = editable_course(request, course_id)
+        payload = await json_object(request)
+        job_id = payload.get("job_id")
+        if not isinstance(job_id, str):
+            raise HTTPException(400, "请选择自己的 AI 出题任务")
+        find_job(request, job_id, owner_only=True)
+        chapter_id = payload.get("chapter_id")
+        if not isinstance(chapter_id, str) or chapter_id not in {chapter["id"] for chapter in course["chapters"]}:
+            raise HTTPException(400, "请选择有效的目标章节")
+        ids = payload.get("question_ids")
+        if (not isinstance(ids, list) or not 1 <= len(ids) <= 10
+                or any(not isinstance(item, str) for item in ids) or len(set(ids)) != len(ids)):
+            raise HTTPException(400, "请勾选 1–10 道不重复的 AI 题目")
+        store = request.app.state.learning
+        with request.app.state.quizzes.lock, store.lock:
+            try:
+                quiz = request.app.state.quizzes.read(job_id)
+            except SummaryError as error:
+                raise HTTPException(error.status_code, str(error)) from None
+            if payload.get("quiz_id") != quiz["id"]:
+                raise HTTPException(409, "AI 题目版本已更新，请重新预览后再导入")
+            questions = {question["id"]: question for question in quiz["questions"]}
+            if any(qid not in questions for qid in ids):
+                raise HTTPException(400, "勾选的题目不属于这份 AI 练习")
+            before = deepcopy(course)
+            imported, existing = [], []
+            for qid in ids:
+                source = {"job_id": job_id, "quiz_id": quiz["id"], "question_id": qid}
+                previous = next((q for q in course["questions"] if q.get("ai_source") == source), None)
+                if previous:
+                    existing.append(previous["id"])
+                    continue
+                question = {**deepcopy(questions[qid]), "id": uuid.uuid4().hex[:10],
+                            "chapter_id": chapter_id, "ai_source": source}
+                course["questions"].append(question)
+                imported.append(question["id"])
+            if imported:
+                course["updated_at"] = LearningStore.now()
+                try:
+                    store.save()
+                except OSError:
+                    course.clear()
+                    course.update(before)
+                    raise HTTPException(507, "题目未导入，无法保存课程，请检查磁盘后重试") from None
+            return {"imported_ids": imported, "existing_ids": existing,
+                    "course": store.public_course(course, include_answers=True)}
 
     @app.post("/api/courses/{course_id}/questions/reorder")
     async def reorder_questions(request: Request, course_id: str):
@@ -903,11 +978,11 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 options = payload.get("options")
                 if not isinstance(options, list) or not 2 <= len(options) <= 4 or any(not str(item).strip() for item in options):
                     raise HTTPException(400, "请填写 2–4 个选项")
-                options = [str(item).strip()[:100] for item in options[:4]]
+                options = [str(item).strip()[:1000] for item in options[:4]]
             answer = payload.get("answer", question.get("answer"))
             if type(answer) is not int or not 0 <= answer < len(options):
                 raise HTTPException(400, "请选择正确答案")
-            explanation = str(payload.get("explanation", question.get("explanation", ""))).strip()[:2000]
+            explanation = str(payload.get("explanation", question.get("explanation", ""))).strip()[:3000]
             chapter_id = str(payload.get("chapter_id", question.get("chapter_id", ""))).strip()
             if chapter_id not in {item["id"] for item in course["chapters"]}:
                 raise HTTPException(400, "章节不存在")
@@ -927,7 +1002,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             status = payload.get("status")
             if status not in (None, "retired", "active"):
                 raise HTTPException(400, "题目状态无效")
-            question["text"] = text[:300]
+            question["text"] = text[:3000]
             question["options"] = options
             question["answer"] = answer
             question["explanation"] = explanation
@@ -963,6 +1038,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         course = editable_course(request, course_id)
         if not course:
             raise HTTPException(404, "课程不存在")
+        if len(course.get("major_ids", [])) != 1:
+            raise HTTPException(400, "发布教学班前请指定一个学生专业")
         if not course["resources"] or not (_active_questions(course) or _active_programming(course)):
             raise HTTPException(400, "发布前至少需要一份学习资源和一道练习题")
         with request.app.state.learning.lock:
@@ -1339,7 +1416,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                   if record and isinstance(record.get("score"), (int, float))]
         chapter_title = next((chapter["title"] for chapter in course["chapters"]
                               if chapter["id"] == assignment.get("chapter_id")), "自选题组")
-        return {**assignment, "course_name": course["title"], "chapter_title": chapter_title,
+        return {**assignment, "course_name": course["title"] + (" · " + course["teaching_class"] if course.get("teaching_class") else ""), "chapter_title": chapter_title,
                 "state": state, "student_count": len(roster), "submitted_count": len(submitted),
                 "missing_count": len([student for student in roster if student["id"] not in submitted]),
                 "late_count": len([record for record in latest_by_student.values() if record and record.get("late")]),
@@ -1348,7 +1425,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 "missing_students": [{"id": student["id"], "name": student["name"]}
                                      for student in roster if student["id"] not in submitted]}
 
-    def student_assignment_view(assignment, course, records):
+    def student_assignment_view(assignment, course, records, practice_records=()):
         state = _assignment_state(assignment)
         records = sorted(records, key=lambda item: item.get("submitted_at", ""), reverse=True)
         latest = records[0] if records else None
@@ -1358,13 +1435,19 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                               if chapter["id"] == assignment.get("chapter_id")), "自选题组")
         max_attempts = max(1, int(assignment.get("max_attempts") or 1))
         can_attempt = state in {"open", "late"} and len(records) < max_attempts
-        return {**assignment, "course_name": course["title"], "chapter_title": chapter_title,
+        question_ids = {question["id"] for question in _assignment_questions(course, assignment)}
+        practices = [record for record in practice_records
+                     if record.get("course_id") == course["id"] and not record.get("assignment_id")
+                     and record.get("type") not in {"python", "ai_quiz"}
+                     and any(detail.get("question_id") in question_ids for detail in record.get("details", []))]
+        return {**assignment, "course_name": course["title"] + (" · " + course["teaching_class"] if course.get("teaching_class") else ""), "chapter_title": chapter_title,
                 "state": state, "attempts": len(records), "completed": len(records) >= max_attempts,
                 "best_score": max(scores) if scores and visible else None,
                 "latest_score": latest.get("score") if latest and visible else None,
                 "last_submitted_at": latest.get("submitted_at") if latest else None,
                 "latest_submission_id": latest.get("id") if latest else None,
                 "pending_release": bool(latest and not visible),
+                "practice_count": len(practices),
                 "can_start": can_attempt, "can_submit": can_attempt,
                 "question_count": len(_assignment_questions(course, assignment))}
 
@@ -1431,6 +1514,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             raise HTTPException(404, "作业不存在")
         if not assignment.get("due_at"):
             raise HTTPException(400, "发布作业前请填写截止时间")
+        available = _assignment_questions(course, assignment)
+        if not available or (assignment.get("question_ids")
+                             and len(available) != len(assignment["question_ids"])):
+            raise HTTPException(400, "作业题目为空或已有题目停用，请编辑题目后再发布")
         with request.app.state.learning.lock:
             assignment["status"] = "published"
             assignment["updated_at"] = LearningStore.now()
@@ -1484,13 +1571,14 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             courses = {course["id"]: course for course in store.data["courses"]
                        if course["status"] == "published" and accepts_student(course, student)}
             items = []
+            student_records = [record for record in store.data["submissions"]
+                               if record["student_id"] == student["id"]]
             for assignment in store.data.get("assignments", []):
                 course = courses.get(assignment.get("course_id"))
                 if not course or assignment.get("status") != "published":
                     continue
-                records = [record for record in store.data["submissions"]
-                           if record.get("assignment_id") == assignment["id"] and record["student_id"] == student["id"]]
-                items.append(student_assignment_view(assignment, course, records))
+                records = [record for record in student_records if record.get("assignment_id") == assignment["id"]]
+                items.append(student_assignment_view(assignment, course, records, student_records))
             items.sort(key=lambda item: (item.get("due_at") or "", item.get("created_at") or ""))
             return items
 
@@ -1504,9 +1592,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             course = store.course(assignment.get("course_id")) if assignment else None
             if not assignment or not course or course["status"] != "published" or not accepts_student(course, student):
                 raise HTTPException(404, "作业不存在或尚未发布")
-            records = [record for record in store.data["submissions"]
-                       if record.get("assignment_id") == assignment_id and record["student_id"] == student["id"]]
-            return {"assignment": student_assignment_view(assignment, course, records),
+            student_records = [record for record in store.data["submissions"]
+                               if record["student_id"] == student["id"] and record.get("course_id") == course["id"]]
+            records = [record for record in student_records if record.get("assignment_id") == assignment_id]
+            return {"assignment": student_assignment_view(assignment, course, records, student_records),
                     "course": store.public_course(course, include_answers=False)}
 
     @app.post("/api/assignments/{assignment_id}/start")
@@ -1634,6 +1723,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                     chapter_title = chapter["title"] if chapter else ""
                 view = _student_record_view(r, assignments) if user["role"] == "student" else r
                 result.append({**view, "course_name": r.get("course_name") or course.get("title", "已删除课程"),
+                               "teaching_class": course.get("teaching_class", ""), "term": course.get("term", ""),
+                               "assignment_title": assignments.get(r.get("assignment_id"), {}).get("title", ""),
+                               "source_type": "ai_quiz" if r.get("type") == "ai_quiz" else "assignment" if r.get("assignment_id") else "self_practice",
                                "chapter_title": chapter_title})
             return result
 
@@ -1673,29 +1765,16 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                             "title": assignment["title"], "assignment_id": assignment["id"],
                             "chapter_id": assignment.get("chapter_id"), "due_at": assignment.get("due_at"),
                             "max_score": 100})
-        for chapter in course.get("chapters", []):
-            if chapter_filter and chapter["id"] != chapter_filter:
-                continue
-            if not any(question.get("chapter_id") == chapter["id"] for question in _active_questions(course)):
-                continue
-            columns.append({"id": "chapter:" + chapter["id"], "kind": "chapter",
-                            "title": chapter["title"], "chapter_id": chapter["id"],
-                            "assignment_id": None, "due_at": None, "max_score": 100})
-        if not chapter_filter and any(not record.get("assignment_id") and not record.get("chapter_id")
-                                      for record in submissions):
-            columns.append({"id": "chapter:all", "kind": "chapter", "title": "综合练习",
-                            "chapter_id": None, "assignment_id": None, "due_at": None, "max_score": 100})
+        # Formal grades are backed by published assignments; practice remains in learning records.
+        published_ids = {item["id"] for item in assignments}
+        submissions = [record for record in submissions if record.get("assignment_id") in published_ids]
         rows = []
         for student in roster:
             cells = {}
             student_records = [record for record in submissions if record["student_id"] == student["id"]]
             for column in columns:
-                if column["kind"] == "assignment":
-                    records = [record for record in student_records
-                               if record.get("assignment_id") == column["assignment_id"]]
-                else:
-                    records = [record for record in student_records
-                               if not record.get("assignment_id") and record.get("chapter_id") == column["chapter_id"]]
+                records = [record for record in student_records
+                           if record.get("assignment_id") == column["assignment_id"]]
                 picked = _pick_submission(records, mode)
                 cells[column["id"]] = {"score": picked.get("score") if picked else None,
                                        "attempts": len(records),
@@ -1815,7 +1894,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                     continue
                 course = next(item for item in courses if item["id"] == assignment["course_id"])
                 records = [record for record in submissions if record.get("assignment_id") == assignment["id"]]
-                assignments.append(student_assignment_view(assignment, course, records))
+                assignments.append(student_assignment_view(assignment, course, records, submissions))
             return {"student": {key: student.get(key) for key in ("id", "name", "major_id")},
                     "courses": [{"id": course["id"], "title": course["title"]} for course in courses],
                     "profile": profile, "submissions": submissions, "wrong_questions": wrong,

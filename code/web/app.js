@@ -6,6 +6,7 @@ import { analyticsPage, personalProfilePage, reviewCenter } from "/static/learni
 import { assignmentsPage, assignmentDetailPage, gradebookPage, studentDetailPage,
          announcementsPage } from "/static/course-pages.js";
 import { mountVideo } from "/static/video.js";
+import { liveQuizPage } from "/static/live-quiz.js";
 import { initializeApiKey } from "/static/ai-key.js";
 import { initializeXfyunCredentials } from "/static/xfyun-key.js";
 
@@ -67,7 +68,7 @@ function nav() {
   const current = view => page === view || (view === "review-center" && ["review", "wrong"].includes(page));
   const item = (view,label,graphic) => link(view, `${icon(graphic)}<span>${label}</span>`, `nav-link${current(view) ? " active" : ""}`);
   return `<header class="nav"><a class="brand" href="${esc(user ? href("dashboard") : "/")}"><span class="brand-mark">${icon("layers")}</span><span>知学<small>LEARN WITH PURPOSE</small></span></a>
-    ${user ? `<nav class="nav-links" aria-label="主导航">${item("dashboard", "工作台", "home")}${item("video", "视频学习", "video")}${item("assignments", "作业", "book")}${user.role === "teacher" ? item("gradebook", "成绩册", "chart") : item("review-center", "错题与复习", "review") + item("profile", "学习画像", "chart")}${item("records", user.role === "teacher" ? "学习分析" : "学习记录", "book")}${item("account", "账号", "user")}</nav><div class="nav-account"><a class="nav-bell" href="${esc(href("announcements"))}" target="_blank" rel="noopener" aria-label="公告">${icon("bell")}${unreadAnnouncements ? `<span class="nav-badge">${unreadAnnouncements > 99 ? "99+" : unreadAnnouncements}</span>` : ""}</a><span class="avatar small">${esc(user.name.slice(0,1))}</span><span class="identity">${esc(user.name)}<small>${user.role === "teacher" ? "教师 · 跨专业授课" : esc(majorName(user.major_id))}</small></span><button class="ghost" id="logout">退出</button></div>` : '<span class="identity">课程、练习与成长，连接在一起。</span>'}</header><div class="notice" role="status" hidden></div>`;
+    ${user ? `<nav class="nav-links" aria-label="主导航">${item("dashboard", "工作台", "home")}${item("video", "视频学习", "video")}${item("live-quiz", "课堂抢答", "target")}${item("assignments", "作业", "book")}${user.role === "teacher" ? item("gradebook", "成绩册", "chart") : item("review-center", "错题与复习", "review") + item("profile", "学习画像", "chart")}${item("records", user.role === "teacher" ? "学习分析" : "学习记录", "book")}${item("account", "账号", "user")}</nav><div class="nav-account"><a class="nav-bell" href="${esc(href("announcements"))}" target="_blank" rel="noopener" aria-label="公告">${icon("bell")}${unreadAnnouncements ? `<span class="nav-badge">${unreadAnnouncements > 99 ? "99+" : unreadAnnouncements}</span>` : ""}</a><span class="avatar small">${esc(user.name.slice(0,1))}</span><span class="identity">${esc(user.name)}<small>${user.role === "teacher" ? "教师 · 跨专业授课" : esc(majorName(user.major_id))}</small></span><button class="ghost" id="logout">退出</button></div>` : '<span class="identity">课程、练习与成长，连接在一起。</span>'}</header><div class="notice" role="status" hidden></div>`;
 }
 function layout(content, title) {
   document.title = `${title} · 知学`;
@@ -500,7 +501,7 @@ async function accountPage() {
 
 async function render() {
   [config, majors] = await Promise.all([api("/api/config"), api("/api/majors")]);
-  if (["course_audiences", "teacher_content", "assignments", "gradebook", "announcements"]
+  if (["course_audiences", "teacher_content", "assignments", "gradebook", "announcements", "live_quiz"]
       .some(key => !config.features?.[key])) {
     throw new Error("后台仍在运行旧版本。请在原终端按 Ctrl+C 停止服务，重新运行 run.py，再打开新终端显示的地址。");
   }
@@ -520,7 +521,7 @@ async function render() {
     initializeApiKey(config, user).catch(error => tell(error.message));
     return;
   }
-  const views = {analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), dashboard, course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage, assignments:() => assignmentsPage(context()), assignment:() => assignmentDetailPage(context()), gradebook:() => gradebookPage(context()), "student-detail":() => studentDetailPage(context()), announcements:() => announcementsPage(context())};
+  const views = {analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), "live-quiz":() => liveQuizPage(context()), dashboard, course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage, assignments:() => assignmentsPage(context()), assignment:() => assignmentDetailPage(context()), gradebook:() => gradebookPage(context()), "student-detail":() => studentDetailPage(context()), announcements:() => announcementsPage(context())};
   if (!views[page]) throw new Error("页面不存在");
   await views[page]();
 }

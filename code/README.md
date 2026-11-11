@@ -1,6 +1,6 @@
 # 知学 · 智慧学习平台 Demo
 
-本地 Python 服务 + 原生 HTML/CSS/JavaScript。支持教师发布课程、学生学习与答题、自动评分、持久化学习记录，以及师生上传课程视频并提取课件图片、PDF 和音频。可通过科大讯飞将录音转为文字稿，并选择课件截图、演讲文字或两者一起交给 DeepSeek 生成课程总结、单选练习；答题后还可生成错题解析与学习分析 HTML，在新标签页阅读并下载。
+本地 Python 服务 + 原生 HTML/CSS/JavaScript。支持教师发布与维护课程、布置带截止时间的作业、查看/导出成绩册、发送公告，学生学习与答题、自动评分、持久化学习记录，以及师生上传课程视频并提取课件图片、PDF 和音频。可通过科大讯飞将录音转为文字稿，并选择课件截图、演讲文字或两者一起交给 DeepSeek 生成课程总结、单选练习；答题后还可生成错题解析与学习分析 HTML，在新标签页阅读并下载。
 
 ## 启动
 
@@ -25,6 +25,58 @@ python run.py --no-browser --port 8800 # 指定端口，不自动打开浏览器
 ```
 
 macOS/Linux 的虚拟环境 Python 位于 `.venv/bin/python`。
+
+## 本轮更新：教师端内容管理、作业、成绩册与公告（2026-11-10）
+
+教师端从“建课 → 发布 → 看统计”扩展为可维护、可布置任务、可导出成绩、可沟通的教学闭环。无需新增依赖，停止旧服务后重新运行 `python run.py` 即可；旧数据自动补齐 `assignments`、`assignment_attempts`、`announcements` 字段。
+
+### 课程内容管理
+
+- 课程标题、简介、分类、难度、学时可在课程编辑页修改；课程支持 **复制**（生成草稿副本，重新生成章节/题目/资源 ID，不复制提交）、**归档**（学生不可访问，历史提交保留）与 **恢复**。
+- 章节支持重命名、上移/下移、删除。删除仍有题目或资源的章节时，必须选择迁移到其他章节，或确认级联删除；课程至少保留一个章节。
+- 学习资源支持编辑名称、类型、章节、讲义正文和代码示例，也支持删除。
+- 单选题支持编辑题干/选项/答案/解析/章节/知识点、上移/下移，以及 **停用**（`status: retired` 软删除）和恢复。停用题目不会下发给学生，历史提交和错题快照仍保留；教师端可见并恢复。
+- Python 编程题同样支持编辑标题/描述/章节、排序、停用与恢复；判题用例保持不变。
+- “学生视角预览”通过 `GET /api/courses/{id}/preview` 返回隐藏答案、解析、隐藏用例和停用题目的课程结构，教师在发布前即可检查学生端排版。
+
+### 作业与截止时间
+
+- 新增 `assignments`：标题、说明、章节（或自定义 `question_ids`）、开放/截止/关闭时间、最多提交次数、作答时限、迟交策略（允许迟交天数与每天扣分）、成绩发布方式（立即/手动）和状态（草稿/已发布/归档）。
+- 学生从作业页或课程章节进入作业，服务端在开始作答时记录 `assignment_attempts`；提交时校验时间窗、次数、时限和迟交扣分。提交记录新增 `assignment_id`、`attempt_id`、`late`、`late_days`、`penalty_percent`、`raw_score`、`duration_seconds`。
+- 手动发布成绩时，学生在教师发布前看不到分数、逐题结果、错题本记录，也不能生成 AI 分析；教师端成绩册和提交情况始终可见。发布后学生恢复正常查看。
+- 教师可查看每份作业的已交/未交人数、平均分、迟交人数和未交名单，并一键向未交学生发送公告提醒。
+- 作业 MVP 目前按章节布置单选题；自由选题组卷和编程题作业尚未接入。
+
+### 成绩册与导出
+
+- 教师“成绩册”按 **学生 × 作业/章节** 展示成绩，可切换“最近一次/最高分/第一次”取值，按章节、学生提交状态筛选；包含平均分、提交项数和迟交标记。
+- `GET /api/teacher/gradebook?course_id=...` 返回矩阵；`GET /api/teacher/gradebook.csv?course_id=...` 导出带 UTF-8 BOM 的 CSV，Excel 直接打开中文不乱码。
+- 点击学生姓名进入个人详情：四维雷达、作业情况、练习提交、错题与掌握情况；接口只允许教师查看本人课程范围内的学生。
+- 成绩册统计课程面向专业学生及已参与学生；Python 编程题仍按学习记录展示，不计入单选成绩列。
+
+### 公告与提醒
+
+- 新增 `announcements`：标题、正文、受众（全体/未提交/需关注）、置顶、收件人快照和已读记录。
+- 收件人由服务端按课程范围和提交情况计算，不接受浏览器上传名单；未提交/需关注受众在发送时生成快照。
+- 学生端导航显示未读红点，工作台展示最新公告，公告页支持“标记已读”和“全部标记已读”；教师端显示收件人数、已读人数并可删除公告。
+- 作业管理页的“提醒未交”会复用公告能力，向未交学生发送作业提醒，不调用外部邮件服务。
+
+### 接口、文件与验证
+
+- 内容管理：`PATCH/DELETE /api/courses/{id}`、`POST /api/courses/{id}/duplicate`、`POST /api/courses/{id}/restore`、`GET /api/courses/{id}/preview`、章节/资源/单选题/编程题的 `PATCH`/`DELETE` 与 `reorder`。
+- 作业：`/api/courses/{id}/assignments`（教师 CRUD/发布/发布成绩/提醒/提交情况）、`/api/assignments`（学生列表）、`/api/assignments/{id}`、`POST /api/assignments/{id}/start`；提交仍走 `POST /api/courses/{id}/submissions`，额外携带 `assignment_id` 与 `attempt_id`。
+- 成绩册：`/api/teacher/gradebook`、`/api/teacher/gradebook.csv`、`/api/teacher/students/{student_id}`。
+- 公告：`/api/courses/{id}/announcements`、`/api/announcements`、`POST /api/announcements/{id}/read`。
+- 前端新增 `web/course-pages.js`（作业、成绩册、学生详情、公告），扩展 `web/app.js`（课程编辑、导航、工作台、学生视角预览）和 `web/programming.js`（编程题编辑/排序/停用）；样式追加在 `web/style.css`。
+- 新增 `tests/test_teacher_features.py`，覆盖内容编辑/排序/停用/复制/归档/预览、作业时间窗/次数/时限/迟交/手动发布、成绩册矩阵与 CSV、公告受众/已读/权限。全量 **118 项测试通过**；同时修复了 `tests/test_analyses.py` 在中文 Windows 下读取 UTF-8 状态文件的编码问题。
+- 使用真实 Chrome 验收了教师课程编辑（改课程信息、加章节/题目、编辑与停用、加资源、删章节、复制课程）、教师作业/成绩册/公告、学生作业作答与公告已读、学生视角预览；桌面与 390px 宽度下均无页面级横向溢出，浏览器控制台无脚本异常。
+
+验证命令：
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_teacher_features.py -v
+.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+```
 
 ## 本轮更新：AI 错题与学习分析（2026-11-10）
 
@@ -378,7 +430,7 @@ python run.py
 run.py / run.bat          # 虚拟环境、镜像安装、启动与环境检查
 requirements.txt         # 运行依赖
 demo/accounts.py         # 本地账号文件、注册、登录、改密、会话验证
-demo/app.py              # HTTP API、角色权限、课程、答题与学习记录
+demo/app.py              # HTTP API、角色权限、课程内容、作业、成绩册、公告与学习记录
 demo/jobs.py             # 视频任务、账号归属、持久化、取消与恢复
 demo/media.py            # 本地 JPG/PDF/ZIP/MP3 提取算法
 demo/pptx_export.py      # 已提取 JPG → 每页一张图片的 PPTX
@@ -387,7 +439,8 @@ demo/analyses.py         # 根据提交快照调用 DeepSeek 生成学习分析 
 demo/summaries.py        # DeepSeek 密钥、三种来源/前提校验、图片与文字请求、HTML 检查
 demo/transcriptions.py   # 讯飞凭据、音频上传/识别、HTML/TXT 保存
 web/index.html           # 页面入口与视频工作台模板
-web/app.js               # 登录、工作台、独立页面、课程与记录交互
+web/app.js               # 登录、工作台、课程编辑、导航与学生视角预览
+web/course-pages.js      # 作业、成绩册、学生详情与公告页面
 web/ai-quiz.js           # AI 自测进度、作答、本地判分及保存记录
 web/analysis.js          # 分析入口、密钥检查、进度、查看与下载
 web/ai-key.js            # 缺少密钥时的密码弹窗、会话提交与更换
@@ -397,6 +450,7 @@ web/style.css            # 界面样式与响应式布局
 tests/test_demo.py       # 真实 HTTP + FFmpeg 集成测试
 tests/test_bootstrap.py  # 镜像安装、复用与失败重试测试
 tests/test_teacher_analytics.py # 教师统计、画像、专业组/课程隔离、任务删除与密钥交互回归
+tests/test_teacher_features.py # 内容管理、作业、成绩册、公告与权限回归
 tests/test_summaries.py  # 三种总结来源、前提、权限、密钥、故障恢复与安全验证
 tests/test_transcriptions.py # 讯飞凭据、录音转写、权限与下载验证
 tests/test_analyses.py   # 分析证据、权限、故障恢复、AI 自测记录与报告验证

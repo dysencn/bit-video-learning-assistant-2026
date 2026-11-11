@@ -4,8 +4,23 @@ import {analysisLink} from "/static/analysis.js";
 const caseFields = () => `<div class="python-case"><label>测试输入<textarea class="case-input" maxlength="8192" placeholder="允许空输入"></textarea></label><label>预期输出<textarea class="case-output" maxlength="8192" placeholder="允许空输出"></textarea></label><button class="ghost remove-case" type="button">移除此用例</button></div>`;
 
 export function teacherProgramming(course) {
-  return `<section class="editor"><h2>Python 编程题</h2><p class="muted">填写题意、公开示例和判题输入输出即可，无需参考代码。发布课程后学生可作答。</p>
-    <div class="editor-list">${(course.programming_questions || []).map(q => `<div><b>${esc(q.title)}</b><small>${esc(course.chapters.find(c => c.id === q.chapter_id)?.title)} · ${q.test_cases.length} 个判题用例</small><details><summary>查看题意与用例</summary><p class="python-description">${esc(q.description)}</p>${q.test_cases.map((c,i) => `<p>测试 ${i+1}</p><pre>输入：\n${esc(c.input)}\n预期输出：\n${esc(c.output)}</pre>`).join("")}</details></div>`).join("") || "暂无编程题"}</div>
+  const all = course.programming_questions || [];
+  const active = all.filter(q => q.status !== "retired");
+  const retired = all.filter(q => q.status === "retired");
+  const chapterName = cid => course.chapters.find(c => c.id === cid)?.title || "未分章节";
+  const chapterOptionsFor = selected => course.chapters.map(c => `<option value="${esc(c.id)}" ${c.id === selected ? "selected" : ""}>${esc(c.title)}</option>`).join("");
+  const questionRow = (q, index, isRetired) => `<div class="editor-item ${isRetired ? "retired-item" : ""}"><details><summary><b>${esc(q.title)}</b><small>${esc(chapterName(q.chapter_id))} · ${q.test_cases.length} 个判题用例${isRetired ? " · 已停用" : ""}</small></summary>
+    <details><summary>查看题意与用例</summary><p class="python-description">${esc(q.description)}</p>${q.test_cases.map((c, i) => `<p>测试 ${i + 1}</p><pre>输入：\n${esc(c.input)}\n预期输出：\n${esc(c.output)}</pre>`).join("")}</details>
+    <form class="edit-programming" data-question="${esc(q.id)}"><label>编程题标题<input name="title" maxlength="100" value="${esc(q.title)}" required></label>
+      <label>题目描述<textarea name="description" maxlength="5000" required>${esc(q.description)}</textarea></label>
+      <label>章节<select name="chapter_id">${chapterOptionsFor(q.chapter_id)}</select></label>
+      <div class="actions"><button class="secondary" type="submit">保存编程题</button>${isRetired ? `<button class="ghost" type="button" data-restore-programming="${esc(q.id)}">恢复题目</button>` : `<button class="ghost danger" type="button" data-retire-programming="${esc(q.id)}">停用题目</button>`}</div>
+    </form>
+    ${isRetired ? "" : `<div class="item-actions"><button class="ghost small" type="button" data-move-programming="${esc(q.id)}" data-direction="-1" ${index === 0 ? "disabled" : ""}>上移</button><button class="ghost small" type="button" data-move-programming="${esc(q.id)}" data-direction="1" ${index === active.length - 1 ? "disabled" : ""}>下移</button></div>`}
+  </details></div>`;
+  return `<section class="editor"><h2>Python 编程题</h2><p class="muted">填写题意、公开示例和判题输入输出即可，无需参考代码。发布课程后学生可作答；已停用的题目不会下发给学生。</p>
+    <div class="editor-list">${active.map((q, index) => questionRow(q, index, false)).join("") || "暂无编程题"}</div>
+    ${retired.length ? `<details class="retired-list"><summary>已停用编程题 ${retired.length} 道（学生端不显示）</summary>${retired.map(q => questionRow(q, 0, true)).join("")}</details>` : ""}
     <form id="programming-form"><label>章节<select name="chapter_id">${course.chapters.map(c => `<option value="${esc(c.id)}">${esc(c.title)}</option>`).join("")}</select></label>
     <label>编程题标题<input name="title" maxlength="100" required placeholder="例如：两个整数之和"></label>
     <label>题目描述<textarea name="description" maxlength="5000" required placeholder="说明输入格式、输出格式、取值范围，以及需要完成的任务"></textarea></label>
@@ -16,7 +31,7 @@ export function teacherProgramming(course) {
 }
 
 export function bindTeacherProgramming(ctx, course, reload) {
-  const {root, post, tell} = ctx;
+  const {root, post, patch, del, tell} = ctx;
   const form = root.querySelector("#programming-form"), cases = root.querySelector("#python-test-cases");
   root.querySelector("#add-python-case").onclick = () => {
     if (cases.children.length >= 9) return tell("最多 10 个判题用例（包括示例）");
@@ -34,6 +49,40 @@ export function bindTeacherProgramming(ctx, course, reload) {
     } catch (error) { tell(error.message); }
     finally { button.disabled = false; }
   };
+  root.querySelectorAll("form.edit-programming").forEach(item => {
+    item.onsubmit = async event => {
+      event.preventDefault();
+      try {
+        await patch(`/api/courses/${encodeURIComponent(course.id)}/programming-questions/${encodeURIComponent(item.dataset.question)}`,
+          Object.fromEntries(new FormData(item)));
+        await reload(); tell("编程题已保存");
+      } catch (error) { tell(error.message); }
+    };
+  });
+  root.querySelectorAll("[data-retire-programming]").forEach(button => {
+    button.onclick = async () => {
+      if (!confirm("停用后学生端不再显示该题，历史判题记录仍保留。继续？")) return;
+      try { await del(`/api/courses/${encodeURIComponent(course.id)}/programming-questions/${encodeURIComponent(button.dataset.retireProgramming)}`); await reload(); tell("编程题已停用"); }
+      catch (error) { tell(error.message); }
+    };
+  });
+  root.querySelectorAll("[data-restore-programming]").forEach(button => {
+    button.onclick = async () => {
+      try { await patch(`/api/courses/${encodeURIComponent(course.id)}/programming-questions/${encodeURIComponent(button.dataset.restoreProgramming)}`, {status:"active"}); await reload(); tell("编程题已恢复"); }
+      catch (error) { tell(error.message); }
+    };
+  });
+  root.querySelectorAll("[data-move-programming]").forEach(button => {
+    button.onclick = async () => {
+      const ids = (course.programming_questions || []).map(question => question.id);
+      const index = ids.indexOf(button.dataset.moveProgramming);
+      const target = index + Number(button.dataset.direction);
+      if (index < 0 || target < 0 || target >= ids.length) return;
+      [ids[index], ids[target]] = [ids[target], ids[index]];
+      try { await post(`/api/courses/${encodeURIComponent(course.id)}/programming-questions/reorder`, {question_ids:ids}); await reload(); tell("编程题顺序已更新"); }
+      catch (error) { tell(error.message); }
+    };
+  });
 }
 
 function resultsHtml(run) {

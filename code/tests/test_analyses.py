@@ -118,7 +118,7 @@ class AnalysisHTTPTests(unittest.TestCase):
         stored=next(r for r in self.app.state.learning.data['submissions'] if r['id']==self.record['id']);self.assertEqual(stored,original)
         restored=AnalysisManager(self.root/'analyses')
         self.assertEqual(restored.html('student-demo-1',self.record['id']),HTML);restored.close()
-        self.assertNotIn('fixture-secret',(self.root/'analyses'/state['id']/'state.json').read_text())
+        self.assertNotIn('fixture-secret',(self.root/'analyses'/state['id']/'state.json').read_text(encoding='utf-8'))
 
     def test_teacher_and_student_permissions_checked_on_every_report_route(self):
         self.generate()

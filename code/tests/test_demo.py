@@ -578,6 +578,58 @@ class DemoIntegrationTest(unittest.TestCase):
         after = [r["id"] for r in self.json_request("/api/learning-records", account=DEMO_STUDENT)]
         self.assertEqual(after, before)
 
+    def test_18_wrong_question_filters_and_csv_export(self):
+        course = self.json_request("/api/courses", {"title": "错题导出测试课程", "description": "验证筛选与导出"})
+        cid = course["id"]
+        first = self.json_request(f"/api/courses/{cid}/questions", {"text": "变量用于做什么？", "options": ["保存数据", "删除文件"],
+                                                                     "answer": 0, "knowledge_point": "变量概念"})
+        second = self.json_request(f"/api/courses/{cid}/questions", {"text": "2+2=?", "options": ["3", "4"],
+                                                                     "answer": 1, "knowledge_point": "算术"})
+        q1 = first["questions"][0]["id"]
+        q2 = next(question["id"] for question in second["questions"] if question["id"] != q1)
+        self.json_request(f"/api/courses/{cid}/resources", {"name": "课件", "kind": "课件"})
+        self.json_request(f"/api/courses/{cid}/publish", {})
+        # 两题都答错：错题本归档两条
+        self.json_request(f"/api/courses/{cid}/submissions", {"answers": {q1: 1, q2: 0}}, account=DEMO_STUDENT)
+        mine = [record for record in self.json_request("/api/wrong-questions", account=DEMO_STUDENT)
+                if record["course_id"] == cid]
+        self.assertEqual(len(mine), 2)
+        # 服务端按课程、知识点、章节筛选
+        self.assertEqual(len(self.json_request(f"/api/wrong-questions?course_id={cid}", account=DEMO_STUDENT)), 2)
+        point = quote("变量概念")
+        only_point = self.json_request(f"/api/wrong-questions?course_id={cid}&knowledge_point={point}",
+                                       account=DEMO_STUDENT)
+        self.assertEqual(len(only_point), 1)
+        self.assertEqual(only_point[0]["knowledge_point_name"], "变量概念")
+        chapter_value = mine[0]["chapter_title"] or "未分章节"
+        chapter_rows = self.json_request(f"/api/wrong-questions?course_id={cid}&chapter={quote(chapter_value)}",
+                                         account=DEMO_STUDENT)
+        self.assertEqual(len(chapter_rows),
+                         len([record for record in mine if (record["chapter_title"] or "未分章节") == chapter_value]))
+        # CSV 导出：带 BOM、表头完整、条数与筛选一致
+        with self.request(f"/api/wrong-questions/export.csv?course_id={cid}", **{"X-Account-ID": DEMO_STUDENT}) as response:
+            self.assertEqual(200, response.getcode())
+            self.assertEqual("text/csv", response.headers.get_content_type())
+            raw = response.read()
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf"), "导出的 CSV 应带 UTF-8 BOM，Excel 才能正确识别中文")
+        import csv as csv_reader
+        rows = list(csv_reader.reader(io.StringIO(raw.decode("utf-8-sig"))))
+        self.assertEqual(len(mine) + 1, len(rows))
+        header = rows[0]
+        for column in ("课程", "章节", "知识点", "题干", "选项", "正确答案", "答错次数", "状态", "下次复习"):
+            self.assertIn(column, header)
+        self.assertEqual("待巩固", rows[1][header.index("状态")])
+        self.assertIn("变量用于做什么", " ".join(rows[1]))
+        # 按知识点导出的行数与接口筛选一致
+        with self.request(f"/api/wrong-questions/export.csv?course_id={cid}&knowledge_point={point}",
+                          **{"X-Account-ID": DEMO_STUDENT}) as response:
+            filtered = list(csv_reader.reader(io.StringIO(response.read().decode("utf-8-sig"))))
+        self.assertEqual(2, len(filtered))
+        # 教师无权导出学生错题
+        with self.assertRaises(HTTPError) as caught:
+            self.request("/api/wrong-questions/export.csv", **{"X-Account-ID": DEMO_TEACHER})
+        self.assertEqual(caught.exception.code, 403)
+
 
 if __name__ == "__main__":
     unittest.main()

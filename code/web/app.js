@@ -519,7 +519,7 @@ async function accountPage() {
 
 async function render() {
   [config, majors] = await Promise.all([api("/api/config"), api("/api/majors")]);
-  if (["course_audiences", "teacher_content", "assignments", "gradebook", "announcements", "teacher_workspace", "teaching_classes", "professional_classes", "assignment_practice_progress", "live_quiz", "independent_assignments"]
+  if (["course_audiences", "teacher_content", "assignments", "gradebook", "announcements", "teacher_workspace", "teaching_classes", "professional_classes", "assignment_practice_progress", "live_quiz", "independent_assignments", "review_calendar_export"]
       .some(key => !config.features?.[key])) {
     throw new Error("后台仍在运行旧版本。请在原终端按 Ctrl+C 停止服务，重新运行 run.py，再打开新终端显示的地址。");
   }

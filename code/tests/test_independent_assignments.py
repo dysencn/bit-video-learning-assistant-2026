@@ -141,6 +141,27 @@ class IndependentAssignmentTests(unittest.TestCase):
         self.assertEqual(question['explanation'],'更新后的解析')
         self.assertNotIn('test_cases',question)
 
+    def test_wrong_question_export_respects_answer_lock_and_student_scope(self):
+        def exported(account=STUDENT):
+            request=Request(self.url+'/api/wrong-questions/export.csv?course_id=course-demo',
+                headers={'X-Local-Token':self.token,'X-Account-ID':account})
+            with self.client.open(request,timeout=5) as response:
+                content=response.read()
+                self.assertTrue(content.startswith(b'\xef\xbb\xbf'))
+                self.assertIn('attachment',response.headers['Content-Disposition'])
+                return content.decode('utf-8-sig')
+        paper=self.paper(2)
+        self.submit(paper)
+        self.assertNotIn('作业私有题',exported())
+        self.assertNotIn('作业私有解析',exported())
+        self.submit(paper)
+        visible=exported()
+        self.assertIn('作业私有题',visible)
+        self.assertIn('作业私有解析',visible)
+        self.assertIn('B. 9',visible)
+        self.assertNotIn('作业私有题',exported(OTHER))
+        self.error(403,'/api/wrong-questions/export.csv',account=TEACHER)
+
 class IndependentAssignmentMigrationTests(unittest.TestCase):
     def test_snapshot_preserves_legacy_submission_evidence_and_backup(self):
         with tempfile.TemporaryDirectory() as folder:

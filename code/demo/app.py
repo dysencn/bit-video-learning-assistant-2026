@@ -183,6 +183,27 @@ def _student_record_view(record, assignments, submissions):
     return {**record, "answers_locked": False, "can_analyze": True}
 
 
+def _filter_wrong_items(items, course_id=None, knowledge_point=None, chapter=None):
+    """错题本按课程、章节、知识点过滤；"all" 或空值表示不过滤。"""
+    if course_id and course_id != "all":
+        items = [item for item in items if item.get("course_id") == course_id]
+    if knowledge_point and knowledge_point != "all":
+        items = [item for item in items if (item.get("knowledge_point_name") or "未分类") == knowledge_point]
+    if chapter and chapter != "all":
+        items = [item for item in items if (item.get("chapter_title") or "未分章节") == chapter]
+    return items
+
+
+def _wrong_answer_label(snapshot):
+    options = snapshot.get("options") or []
+    answer = snapshot.get("answer")
+    if isinstance(answer, int) and 0 <= answer < len(options):
+        return f"{chr(65 + answer)}. {options[answer]}"
+    return ""
+
+
+
+
 def _late_metrics(assignment, now):
     _, due_at, _ = _assignment_window(assignment)
     if not due_at or now <= due_at:
@@ -429,7 +450,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                              "ai_quiz": True, "ai_analysis": True, "teacher_content": True,
                              "assignments": True, "gradebook": True, "announcements": True,
                              "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
-                             "assignment_practice_progress": True, "live_quiz": True, "independent_assignments": True}}
+                             "assignment_practice_progress": True, "live_quiz": True, "independent_assignments": True, "review_calendar_export": True}}
 
     async def json_object(request):
         try:
@@ -2156,16 +2177,52 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                        "needs_attention": False, "not_started": True}
             return {"profile": own, "scope": "本人可学习及已参与课程；仅统计正式练习提交，复习不计分"}
 
-    @app.get("/api/wrong-questions")
-    async def wrong_questions(request: Request):
-        user = require_role(request, "student")
+    def student_wrong_records(request, user):
+        """当前学生的可见错题；作业答案未解锁时，列表与导出均不返回。"""
         store = request.app.state.learning
-        with store.lock:
-            names = {course["id"]: course["title"] for course in store.data["courses"]}
-            assignments = {item["id"]: item for item in store.data.get("assignments", [])}
-            return [{**record, "course_name": names.get(record["course_id"], "历史课程")}
-                    for record in store.data.setdefault("wrong_questions", [])
-                    if record["student_id"] == user["id"] and record_answers_visible(record, assignments, store.data["submissions"])]
+        names = {course["id"]: course["title"] + (" · " + course["teaching_class"] if course.get("teaching_class") else "") for course in store.data["courses"]}
+        assignments = {item["id"]: item for item in store.data.get("assignments", [])}
+        return [{**record, "course_name": names.get(record["course_id"], "历史课程")}
+                for record in store.data.setdefault("wrong_questions", [])
+                if record["student_id"] == user["id"] and record_answers_visible(record, assignments, store.data["submissions"])]
+
+    @app.get("/api/wrong-questions")
+    async def wrong_questions(request: Request, course_id: str | None = None,
+                              knowledge_point: str | None = None, chapter: str | None = None):
+        user = require_role(request, "student")
+        with request.app.state.learning.lock:
+            items = student_wrong_records(request, user)
+        return _filter_wrong_items(items, course_id, knowledge_point, chapter)
+
+    @app.get("/api/wrong-questions/export.csv")
+    async def wrong_questions_csv(request: Request, course_id: str | None = None,
+                                  knowledge_point: str | None = None, chapter: str | None = None):
+        """导出本人错题为 CSV（UTF-8 BOM，Excel 可直接打开）。"""
+        user = require_role(request, "student")
+        with request.app.state.learning.lock:
+            items = _filter_wrong_items(student_wrong_records(request, user),
+                                        course_id, knowledge_point, chapter)
+        items.sort(key=lambda item: item.get("last_wrong_at") or "", reverse=True)
+        stream = io.StringIO()
+        writer = csv.writer(stream, lineterminator="\r\n")
+        writer.writerow(["课程", "章节", "知识点", "题干", "选项", "正确答案", "解析",
+                         "答错次数", "首次答错", "最近答错", "状态", "下次复习", "复习次数", "最近复习结果"])
+        for item in items:
+            snapshot = item.get("question_snapshot") or {}
+            options = snapshot.get("options") or []
+            writer.writerow([
+                item.get("course_name", ""), item.get("chapter_title") or "未分章节",
+                item.get("knowledge_point_name") or "未分类", snapshot.get("text", ""),
+                " / ".join(f"{chr(65 + index)}. {text}" for index, text in enumerate(options)),
+                _wrong_answer_label(snapshot), snapshot.get("explanation") or "未填写解析",
+                item.get("wrong_count", 0), item.get("first_wrong_at") or "", item.get("last_wrong_at") or "",
+                "已掌握" if item.get("status") == "mastered" else "待巩固",
+                item.get("next_review_at") or "", item.get("review_count", 0),
+                "" if item.get("last_review_result") is None else ("答对" if item.get("last_review_result") else "答错"),
+            ])
+        filename = quote("错题本.csv", safe="")
+        return Response(stream.getvalue().encode("utf-8-sig"), media_type="text/csv; charset=utf-8",
+                        headers={"Content-Disposition": f"attachment; filename=wrong-questions.csv; filename*=UTF-8''{filename}"})
 
     @app.post("/api/wrong-questions/{question_id}/mastered")
     async def mark_mastered(request: Request, question_id: str):

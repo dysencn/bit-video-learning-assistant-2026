@@ -217,6 +217,65 @@ class AudienceProfileHTTPTests(unittest.TestCase):
         self.request(f"/api/wrong-questions/{item['id']}/mastered", {}, "student-demo-1")
         self.assertEqual(self.request("/api/review/due", account="student-demo-1"), [])
 
+    def test_live_quiz_isolated_by_professional_class_without_changing_learning_grades(self):
+        soft = self.request("/api/courses/course-demo")
+        ai = self.request("/api/courses/course-python-02")
+        before = self.request("/api/learning-records", account="student-demo-1")
+        profile = self.request("/api/student/profile", account="student-demo-1")
+        gradebook = self.request("/api/teacher/gradebook?course_id=course-demo")["summary"]
+        soft_quiz = self.request("/api/courses/course-demo/live-quizzes", {
+            "question_id": soft["questions"][0]["id"], "duration_seconds": 60})
+        ai_quiz = self.request("/api/courses/course-python-02/live-quizzes", {
+            "question_id": ai["questions"][0]["id"], "duration_seconds": 60})
+        self.assertIn("软件工程 01班", soft_quiz["course_title"])
+        self.assertIn("人工智能 01班", ai_quiz["course_title"])
+        for student, expected in (("student-demo-1", soft_quiz), ("student-demo-2", ai_quiz)):
+            self.assertEqual(self.request("/api/live-quizzes/current", account=student)["quiz"]["id"], expected["id"])
+        self.assertIsNone(self.request("/api/live-quizzes/current", account="student-demo-3")["quiz"])
+        endpoint = f"/api/live-quizzes/{soft_quiz['id']}"
+        self.error(404, endpoint, account="student-demo-2")
+        self.error(403, endpoint, account="teacher-demo-2")
+        self.error(403, endpoint + "/start", {}, "teacher-demo-2")
+        self.error(400, "/api/courses/course-deep-learning-02/live-quizzes", {
+            "question": {"text": "草稿班题目", "options": ["A", "B"], "answer": 0}}, "teacher-demo-2")
+        self.request(endpoint + "/start", {})
+        result = self.request(endpoint + "/answers", {"selected": soft["questions"][0]["answer"]}, "student-demo-1")
+        self.assertTrue(result["my_answer"]["correct"])
+        self.error(409, endpoint + "/answers", {"selected": 0}, "student-demo-1")
+        self.request(endpoint + "/close", {})
+        self.request(f"/api/live-quizzes/{ai_quiz['id']}/close", {})
+        self.assertEqual(self.request("/api/learning-records", account="student-demo-1"), before)
+        self.assertEqual(self.request("/api/student/profile", account="student-demo-1"), profile)
+        self.assertEqual(self.request("/api/teacher/gradebook?course_id=course-demo")["summary"], gradebook)
+
+    def test_live_quiz_sse_stream_pushes_start_answer_and_close(self):
+        course = self.request("/api/courses/course-demo")
+        quiz = self.request("/api/courses/course-demo/live-quizzes", {
+            "question_id": course["questions"][0]["id"], "duration_seconds": 60})
+        endpoint = f"/api/live-quizzes/{quiz['id']}"
+        request = Request(self.url + endpoint + "/events", headers={
+            "X-Local-Token": self.token, "X-Account-ID": "teacher-demo-1"})
+        with self.client.open(request, timeout=5) as stream:
+            self.assertIn("text/event-stream", stream.headers["Content-Type"])
+
+            def read_until(predicate):
+                for _ in range(40):
+                    line = stream.readline().decode("utf-8")
+                    if line.startswith("data:"):
+                        view = json.loads(line[5:])
+                        if predicate(view):
+                            return view
+                self.fail("Expected live state was not pushed over SSE")
+
+            self.assertEqual(read_until(lambda view: True)["status"], "waiting")
+            self.request(endpoint + "/start", {})
+            read_until(lambda view: view["status"] == "active")
+            self.request(endpoint + "/answers", {"selected": course["questions"][0]["answer"]}, "student-demo-1")
+            board = read_until(lambda view: view["participant_count"] == 1)
+            self.assertEqual(board["first_correct"]["student"], "张同学")
+            self.request(endpoint + "/close", {})
+            read_until(lambda view: view["status"] == "closed")
+
     def test_demo_grades_link_to_published_assignments_and_matching_professional_class(self):
         store = self.app.state.learning
         seed_activity(store.data, self.app.state.accounts.users)

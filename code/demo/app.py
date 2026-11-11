@@ -1,6 +1,7 @@
 """Loopback-only HTTP API. Video bytes are streamed to this project's data folder."""
 from __future__ import annotations
 
+import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
 import csv
@@ -20,7 +21,7 @@ from urllib.parse import quote, unquote, urlparse
 from html import escape
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.requests import ClientDisconnect
 from starlette.concurrency import run_in_threadpool
@@ -37,6 +38,7 @@ from . import summaries as summary_service
 from .transcriptions import TranscriptionManager, TranscriptionError
 from . import transcriptions as transcription_service
 from .programming import ProgrammingManager, validate_question, LIMITS as PYTHON_LIMITS
+from .live_quizzes import LiveQuizManager, LiveQuizError
 from .quizzes import QuizManager, ACTIVE as QUIZ_ACTIVE
 from .analyses import AnalysisManager
 
@@ -382,6 +384,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         app.state.learning = LearningStore(jobs_root.parent / "learning-platform.json")
         app.state.analyses = AnalysisManager(jobs_root.parent / "analyses")
         app.state.programming = ProgrammingManager(app.state.learning)
+        app.state.live = LiveQuizManager(app.state.learning)
         history_enabled = seed_demo_history if seed_demo_history is not None else os.environ.get("VIDEO_DEMO_SEED_HISTORY", "1") != "0"
         if history_enabled:
             if seed_activity(app.state.learning.data, app.state.accounts.users):
@@ -426,7 +429,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                              "ai_quiz": True, "ai_analysis": True, "teacher_content": True,
                              "assignments": True, "gradebook": True, "announcements": True,
                              "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
-                             "assignment_practice_progress": True}}
+                             "assignment_practice_progress": True, "live_quiz": True}}
 
     async def json_object(request):
         try:
@@ -2027,6 +2030,120 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         body = str(payload.get("body", "")).strip() or f"作业《{assignment['title']}》将于 {due_text} 截止，请尚未提交的同学尽快完成。"
         return create_announcement(request, course, {"title": f"作业提醒：{assignment['title']}", "body": body,
                                                       "audience": "non_submitters", "pinned": False}, teacher)
+
+    # ---- 课堂抢答：SSE 实时同步，不计入正式成绩 ----
+    def live_quiz_access(request, quiz_id):
+        """校验抢答场次可见性：只能是授课教师本人，或该课程面向的学生。"""
+        user = request.app.state.accounts.current(request)
+        store = request.app.state.learning
+        manager = request.app.state.live
+        try:
+            quiz = manager.get(quiz_id)
+        except LiveQuizError as error:
+            raise HTTPException(error.status_code, error.message) from None
+        course = store.course(quiz["course_id"])
+        teacher = user["role"] == "teacher" and course and course["teacher_id"] == user["id"]
+        student = (user["role"] == "student" and course and course["status"] == "published"
+                   and accepts_student(course, user))
+        if not teacher and not student:
+            raise HTTPException(403 if user["role"] == "teacher" else 404, "这场抢答不属于你可见的课程")
+        return user, quiz, bool(teacher)
+
+    @app.post("/api/courses/{course_id}/live-quizzes", status_code=201)
+    async def create_live_quiz(request: Request, course_id: str):
+        course = owned_course(request, course_id)
+        if course.get("status") != "published":
+            raise HTTPException(400, "请先发布教学班，再发起课堂抢答")
+        teacher = request.app.state.accounts.current(request)
+        payload = await json_object(request)
+        try:
+            quiz = request.app.state.live.create(course, teacher, payload)
+        except LiveQuizError as error:
+            raise HTTPException(error.status_code, error.message) from None
+        return request.app.state.live.teacher_view(quiz)
+
+    @app.get("/api/live-quizzes/current")
+    async def current_live_quiz(request: Request):
+        """学生端发现机制：返回本人可见课程中最新一场等待中/进行中的抢答。"""
+        user = request.app.state.accounts.current(request)
+        store = request.app.state.learning
+        visible = {course["id"] for course in store.data["courses"]
+                   if course["status"] == "published" and accepts_student(course, user)}
+        quiz = request.app.state.live.newest(visible)
+        return {"quiz": request.app.state.live.student_view(quiz, user) if quiz else None}
+
+    @app.get("/api/live-quizzes/{quiz_id}")
+    async def read_live_quiz(request: Request, quiz_id: str):
+        user, quiz, is_teacher = live_quiz_access(request, quiz_id)
+        manager = request.app.state.live
+        return manager.teacher_view(quiz) if is_teacher else manager.student_view(quiz, user)
+
+    @app.post("/api/live-quizzes/{quiz_id}/start")
+    async def start_live_quiz(request: Request, quiz_id: str):
+        user = require_role(request, "teacher")
+        manager = request.app.state.live
+        try:
+            quiz = manager.get(quiz_id)
+            manager.start(quiz, user["id"])
+        except LiveQuizError as error:
+            raise HTTPException(error.status_code, error.message) from None
+        return manager.teacher_view(quiz)
+
+    @app.post("/api/live-quizzes/{quiz_id}/answers", status_code=201)
+    async def answer_live_quiz(request: Request, quiz_id: str):
+        user = require_role(request, "student")
+        payload = await json_object(request)
+        viewer, quiz, is_teacher = live_quiz_access(request, quiz_id)
+        if is_teacher:
+            raise HTTPException(403, "教师端不能替学生作答")
+        try:
+            request.app.state.live.answer(quiz, viewer, payload.get("selected"))
+        except LiveQuizError as error:
+            raise HTTPException(error.status_code, error.message) from None
+        return request.app.state.live.student_view(quiz, viewer)
+
+    @app.post("/api/live-quizzes/{quiz_id}/close")
+    async def close_live_quiz(request: Request, quiz_id: str):
+        user = require_role(request, "teacher")
+        manager = request.app.state.live
+        try:
+            quiz = manager.get(quiz_id)
+            manager.close(quiz, user["id"])
+        except LiveQuizError as error:
+            raise HTTPException(error.status_code, error.message) from None
+        return manager.teacher_view(quiz)
+
+    @app.get("/api/live-quizzes/{quiz_id}/events")
+    async def live_quiz_events(request: Request, quiz_id: str):
+        """SSE：每 0.3 秒比对版本，有变化推送完整快照，空闲 15 秒发心跳。"""
+        user, quiz, is_teacher = live_quiz_access(request, quiz_id)
+        manager = request.app.state.live
+
+        def snapshot():
+            return manager.teacher_view(quiz) if is_teacher else manager.student_view(quiz, user)
+
+        async def stream():
+            last, idle = "", 0
+            try:
+                while True:
+                    if await request.is_disconnected():
+                        break
+                    body = json.dumps(snapshot(), ensure_ascii=False)
+                    if body != last:
+                        last, idle = body, 0
+                        yield f"event: state\ndata: {body}\n\n"
+                    else:
+                        idle += 1
+                        if idle >= 50:
+                            idle = 0
+                            yield ": ping\n\n"
+                    await asyncio.sleep(0.3)
+            except asyncio.CancelledError:
+                return
+
+        return StreamingResponse(stream(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                                          "Connection": "keep-alive"})
 
     @app.get("/api/student/profile")
     async def student_profile(request: Request):

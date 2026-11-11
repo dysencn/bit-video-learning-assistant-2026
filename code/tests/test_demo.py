@@ -514,5 +514,70 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 400)
 
 
+    def test_17_live_quiz_realtime_flow_without_grade(self):
+        course = self.json_request("/api/courses", {"title": "课堂抢答测试课程", "major_ids": ["m-soft"]})
+        cid = course["id"]
+        course = self.json_request(f"/api/courses/{cid}/questions", {"text": "HTTP 中读取资源的方法是？",
+                                                                     "options": ["GET", "POST"], "answer": 0,
+                                                                     "knowledge_point": "HTTP 方法"})
+        qid = course["questions"][0]["id"]
+        self.json_request(f"/api/courses/{cid}/resources", {"name": "课件", "kind": "课件"})
+        self.json_request(f"/api/courses/{cid}/publish", {})
+        before = [r["id"] for r in self.json_request("/api/learning-records", account=DEMO_STUDENT)]
+        # 教师用课程题目发起：教师视图带正确答案
+        quiz = self.json_request(f"/api/courses/{cid}/live-quizzes", {"question_id": qid, "duration_seconds": 60})
+        self.assertEqual(quiz["status"], "waiting")
+        self.assertEqual(quiz["question"]["answer"], 0)
+        self.assertEqual(quiz["question"]["knowledge_point_name"], "HTTP 方法")
+        # 学生不能发起抢答；未开始时学生视图不下发答案
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/courses/{cid}/live-quizzes", {"question_id": qid}, account=DEMO_STUDENT)
+        self.assertEqual(caught.exception.code, 403)
+        view = self.json_request(f"/api/live-quizzes/{quiz['id']}", account=DEMO_STUDENT)
+        self.assertEqual(view["status"], "waiting")
+        self.assertNotIn("answer", view["question"])
+        # 未开始不能作答；学生端能发现最新场次；非本专业学生看不到
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/live-quizzes/{quiz['id']}/answers", {"selected": 0}, account=DEMO_STUDENT)
+        self.assertEqual(caught.exception.code, 409)
+        self.assertEqual(self.json_request("/api/live-quizzes/current", account=DEMO_STUDENT)["quiz"]["id"], quiz["id"])
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/live-quizzes/{quiz['id']}", account="student-demo-2")
+        self.assertEqual(caught.exception.code, 404)
+        # 开始抢答：服务端写入 closes_at
+        started = self.json_request(f"/api/live-quizzes/{quiz['id']}/start", {})
+        self.assertEqual(started["status"], "active")
+        self.assertTrue(started["closes_at"])
+        # 学生作答：提交后才拿到正确答案；同一题只记录一次
+        mine = self.json_request(f"/api/live-quizzes/{quiz['id']}/answers", {"selected": 0}, account=DEMO_STUDENT)
+        self.assertTrue(mine["my_answer"]["correct"])
+        self.assertEqual(mine["question"]["answer"], 0)
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/live-quizzes/{quiz['id']}/answers", {"selected": 1}, account=DEMO_STUDENT)
+        self.assertEqual(caught.exception.code, 409)
+        # 教师看板实时统计：参与人数、票数、正确率、首个答对者
+        board = self.json_request(f"/api/live-quizzes/{quiz['id']}")
+        self.assertEqual(board["participant_count"], 1)
+        self.assertEqual(board["votes"], [1, 0])
+        self.assertEqual(board["correct_rate"], 100)
+        self.assertEqual(board["first_correct"]["student"], "张同学")
+        # 结束本场：学生端此时看到正确答案
+        closed = self.json_request(f"/api/live-quizzes/{quiz['id']}/close", {})
+        self.assertEqual(closed["status"], "closed")
+        after_view = self.json_request(f"/api/live-quizzes/{quiz['id']}", account=DEMO_STUDENT)
+        self.assertEqual(after_view["status"], "closed")
+        self.assertEqual(after_view["question"]["answer"], 0)
+        # 手填题目通道：非法答案被拒，合法题干可再发起一场
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/courses/{cid}/live-quizzes", {"question": {"text": "手填题", "options": ["A", "B"], "answer": 2}})
+        self.assertEqual(caught.exception.code, 400)
+        manual = self.json_request(f"/api/courses/{cid}/live-quizzes", {"question": {"text": "3*3=?", "options": ["6", "9"], "answer": 1}, "duration_seconds": 20})
+        self.assertEqual(manual["status"], "waiting")
+        self.assertEqual(manual["question"]["knowledge_point_name"], "")
+        # 抢答不计入正式成绩：学习记录没有新增提交
+        after = [r["id"] for r in self.json_request("/api/learning-records", account=DEMO_STUDENT)]
+        self.assertEqual(after, before)
+
+
 if __name__ == "__main__":
     unittest.main()

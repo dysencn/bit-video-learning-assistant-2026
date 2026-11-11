@@ -226,3 +226,41 @@ body:has(#platform)>header,body:has(#platform)>main{display:none}#platform{min-h
 #platform .announcement-meta .tag{margin:0}
 @media(max-width:900px){#platform .gradebook-summary{grid-template-columns:repeat(3,minmax(0,1fr))}#platform .editor-fields{grid-template-columns:1fr}}
 @media(max-width:620px){#platform .gradebook-summary{grid-template-columns:repeat(2,minmax(0,1fr))}#platform .assignment-card{padding:16px}#platform .assignment-manage-card{padding:16px}#platform .announcement-card{padding:16px}#platform .gradebook-toolbar label{flex:1;min-width:120px}#platform .gradebook-toolbar select{width:100%;min-width:0}#platform .inline-select{width:100%}#platform .inline-select select{width:100%}#platform .nav-bell{width:32px;height:32px}}
+
+/* 课堂抢答 */
+.live-setup{margin-bottom:26px}
+.live-fields{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 18px}
+.live-fields .span-2{grid-column:1/-1}
+.live-fields label{display:flex;flex-direction:column;gap:7px;font-size:12px;font-weight:600;color:#546862}
+.live-fields input,.live-fields select{background:#fff;border:1px solid #d8e0db;border-radius:9px;padding:10px 12px;color:var(--ink);font-size:13px;width:100%}
+.live-panel{background:#fff;border:1px solid var(--line);border-radius:18px;padding:26px}
+.live-status{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.live-timer{font-size:24px;font-weight:700;color:var(--green);letter-spacing:1px;white-space:nowrap}
+.live-question{font-size:23px;line-height:1.45;margin:6px 0 8px}
+.live-options{display:grid;gap:10px;margin:18px 0}
+.live-option{display:flex;align-items:center;gap:12px;border:1px solid var(--line);border-radius:12px;padding:12px 14px;background:#fbfcf9;flex-wrap:wrap}
+.live-option.correct{border-color:#9fc4b3;background:#eef7f1}
+.live-letter{width:28px;height:28px;flex:0 0 28px;display:grid;place-items:center;border-radius:50%;background:var(--soft);color:var(--green);font-weight:700}
+.live-text{flex:1;font-size:14px;min-width:120px}
+.live-count{font-size:12px;color:var(--muted);white-space:nowrap}
+.live-cells{display:flex;gap:2px}
+.live-cells i{width:6px;height:14px;border-radius:2px;background:#e6ebe5;display:block}
+.live-cells i.on{background:var(--green)}
+.live-ticket{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;border-top:1px solid var(--line);padding-top:16px;margin-top:10px}
+.live-ticket div{display:flex;flex-direction:column;gap:2px}
+.live-ticket b{font-size:21px;color:var(--ink)}
+.live-ticket span{font-size:11px;color:var(--muted)}
+.live-answers-title{display:flex;justify-content:space-between;align-items:baseline;margin:20px 0 8px;font-size:12px}
+.live-answers .record-row{border-top:1px solid var(--line);padding:9px 0}
+.live-waiting{text-align:center;padding:52px 26px}
+.live-pulse{display:inline-grid;place-items:center;width:46px;height:46px;border-radius:50%;background:var(--soft);color:var(--green);margin-bottom:14px}
+.live-pulse .ui-icon{width:20px;height:20px}
+.live-choices{display:grid;gap:10px;margin:20px 0}
+.live-choice{display:flex;align-items:center;gap:12px;width:100%;text-align:left;border:1px solid var(--line);background:#fff;border-radius:12px;padding:14px 16px;font-size:15px;transition:border-color .15s,background .15s}
+.live-choice:hover:not(:disabled){border-color:var(--green);background:#f4f9f5}
+.live-result{border-radius:12px;padding:14px 16px;margin:14px 0;font-size:14px}
+.live-result.correct{background:#eef7f1;color:#146958;border:1px solid #cbe4d5}
+.live-result.incorrect{background:#fff4ee;color:#a34a2f;border:1px solid #eccfc4}
+.live-result p{margin-top:4px;font-size:12px;color:var(--muted)}
+.live-participants{font-size:12px;margin-top:6px}
+@media(max-width:850px){.live-fields{grid-template-columns:1fr}.live-ticket{grid-template-columns:1fr}.live-cells{display:none}.live-question{font-size:20px}}

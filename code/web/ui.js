@@ -18,6 +18,10 @@ const paths = {
 };
 export const icon = name => `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 export const number = value => value === null || value === undefined ? "—" : value;
+export const assignmentSubmissionText = item => item.attempts
+  ? `本作业已提交 ${item.attempts} / ${item.max_attempts} 次`
+  : `本作业尚未提交 · 最多 ${item.max_attempts} 次`;
+
 export const stateTag = student => student.not_started ? '<span class="tag neutral">待开始</span>'
   : student.needs_attention ? '<span class="tag attention">需关注</span>' : '<span class="tag published">正常</span>';
 
@@ -37,8 +41,8 @@ export function radarCard(student, personal = false) {
   }).join("");
   return `<div class="radar-card"><div class="radar-visual"><svg class="radar" viewBox="0 0 360 310" role="img" aria-label="${esc(student.student)}的四维学习雷达图">${rings}${axes}<polygon class="radar-area" points="${dimensions.map(([,v],i) => point(i,v)).join(" ")}"/>${dimensions.map(([,v],i) => `<circle class="radar-dot" cx="${point(i,v).split(",")[0]}" cy="${point(i,v).split(",")[1]}" r="3.5"/>`).join("")}${labels}</svg></div>
     <div class="radar-copy"><span class="eyebrow">LEARNING PROFILE</span><h3>${personal ? "我的学习雷达" : `${esc(student.student)}的学习雷达`}</h3>
-    <p class="muted">${student.not_started ? "还没有正式练习记录。完成第一份练习后，这里会生成你的学习画像。" : `已参与 ${student.course_count} 门课程，留下 ${student.submission_count} 次正式练习记录。`}</p>
+    <p class="muted">${student.not_started ? "还没有正式练习记录。完成第一份练习后，这里会生成你的学习画像。" : `已参与 ${student.course_count} 个教学班，留下 ${student.submission_count} 次正式练习记录。`}</p>
     <div class="radar-legend">${dimensions.map(([name, score]) => `<span><b>${number(score)}</b>${name}</span>`).join("")}</div>
     ${student.weak_points.length ? `<p class="radar-weak">${icon("target")}优先巩固：${esc(student.weak_points.join("、"))}</p>` : ""}
-    <details class="metric-help"><summary>这四个维度如何计算？</summary><p>课程参与：已提交的可学课程数 / 本视图范围内本人可学的已发布课程数。练习积极：本视图课程范围内，与其他学生最高提交次数相比的相对值。平均成绩与答题掌握分别使用提交均分和逐题正确率。复习不计入成绩。${personal ? "学生画像覆盖本人可学及历史参与课程；教师画像仅覆盖该教师的课程，范围不同可能产生不同数值。" : "不同专业学生的可学课程数分别计算。"}</p></details></div></div>`;
+    <details class="metric-help"><summary>这四个维度如何计算？</summary><p>课程参与：已提交的可学教学班数 / 本视图范围内本人可学的已发布教学班数。练习积极：本视图课程范围内，与其他学生最高提交次数相比的相对值。平均成绩与答题掌握分别使用提交均分和逐题正确率。复习不计入成绩。${personal ? "学生画像覆盖本人可学及历史参与课程；教师画像仅覆盖该教师的课程，范围不同可能产生不同数值。" : "不同专业学生的可学课程数分别计算。"}</p></details></div></div>`;
 }

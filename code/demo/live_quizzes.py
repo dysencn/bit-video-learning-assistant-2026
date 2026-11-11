@@ -111,7 +111,8 @@ class LiveQuizManager:
             if busy:
                 raise LiveQuizError("本课程已有一场进行中的抢答，请先结束后再发起", 409)
             quiz = {"id": "live-" + uuid.uuid4().hex[:10], "course_id": course["id"],
-                    "course_title": course["title"], "teacher_id": teacher["id"], "teacher": teacher["name"],
+                    "course_title": course["title"] + (" · " + course["teaching_class"] if course.get("teaching_class") else ""),
+                    "teacher_id": teacher["id"], "teacher": teacher["name"],
                     "question": question, "status": "waiting", "created_at": _now().isoformat(),
                     "started_at": None, "closes_at": None, "closed_at": None,
                     "duration_seconds": duration, "answers": {}, "first_correct": None, "version": 0}

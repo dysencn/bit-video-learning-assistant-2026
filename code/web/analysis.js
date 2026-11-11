@@ -1,15 +1,18 @@
 import {initializeApiKey, ensureApiKey, openApiKeyDialog} from "/static/ai-key.js";
 
 const active = new Set(["preparing", "generating", "validating", "saving"]);
-export function analysisLink(link, recordId) {
-  return link("analysis", "AI 分析", "secondary analysis-link", {record:recordId, start:"1"});
+export function analysisLink(link, recordId, courseId, source) {
+  return link("analysis", "AI 分析", "secondary analysis-link", {record:recordId, start:"1", ...(courseId ? {course:courseId} : {}), ...(source ? {source} : {})});
 }
 
 export async function analysisPage(ctx, recordId, autoStart) {
   const {api, layout, root, user, config, link} = ctx;
   if (!recordId) throw new Error("缺少提交记录，请从答题结果或学习记录打开 AI 分析。");
   if (!config.features?.ai_analysis) throw new Error("本地服务尚未加载 AI 分析，请重新启动服务后刷新页面。");
-  layout(`<div class="learning-panel"><span class="eyebrow">DEEPSEEK · LEARNING FEEDBACK</span><h1>AI 学习分析</h1><p id="analysis-record" class="muted"></p><p class="muted">根据本次全部题目、学生作答和判分结果生成错题解析、掌握情况与复习建议。</p><div id="analysis-status" role="status" aria-live="polite"><p id="analysis-message">正在读取分析状态…</p><progress id="analysis-progress" max="100" aria-label="AI 学习分析进度"></progress><small id="analysis-detail"></small></div><div class="actions"><button class="primary" id="analysis-start">生成 AI 分析</button><a class="secondary" id="analysis-view" href="#" target="_blank" rel="noopener" hidden>查看分析报告 ↗</a><a class="secondary" id="analysis-download" href="#" download hidden>下载 HTML ↓</a></div><button type="button" class="key-settings" id="analysis-key">设置 / 更换 DeepSeek 密钥</button><div class="actions">${link("records", "返回学习记录", "secondary")}</div></div>`, "AI 学习分析");
+  const backLink = user.role === "teacher" && ctx.params.get("course")
+    ? link("teaching-ai", "返回课程 AI 分析", "secondary", {course:ctx.params.get("course")})
+    : user.role === "teacher" ? link("records", "返回学情总览", "secondary") : link("learning-center", "返回学习档案", "secondary", {tab:ctx.params.get("source") === "assignment" ? "assignments" : "practice"});
+  layout(`<div class="learning-panel"><span class="eyebrow">DEEPSEEK · LEARNING FEEDBACK</span><h1>AI 学习分析</h1><p id="analysis-record" class="muted"></p><p class="muted">根据本次全部题目、学生作答和判分结果生成错题解析、掌握情况与复习建议。</p><div id="analysis-status" role="status" aria-live="polite"><p id="analysis-message">正在读取分析状态…</p><progress id="analysis-progress" max="100" aria-label="AI 学习分析进度"></progress><small id="analysis-detail"></small></div><div class="actions"><button class="primary" id="analysis-start">生成 AI 分析</button><a class="secondary" id="analysis-view" href="#" target="_blank" rel="noopener" hidden>查看分析报告 ↗</a><a class="secondary" id="analysis-download" href="#" download hidden>下载 HTML ↓</a></div><button type="button" class="key-settings" id="analysis-key">设置 / 更换 DeepSeek 密钥</button><div class="actions">${backLink}</div></div>`, "AI 学习分析");
   await initializeApiKey(config, user, {prompt:false});
   const $ = id => root.querySelector(`#${id}`);
   const endpoint = `/api/learning-records/${encodeURIComponent(recordId)}/analysis`;

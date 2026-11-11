@@ -40,7 +40,8 @@ def validate_question(payload):
             if not isinstance(item, dict) or any(not isinstance(item.get(k), str) or len(item[k].encode("utf-8")) > 8192 for k in ("input", "output")):
                 raise ValueError(f"{name}的输入、输出必须是文本，每项最多 8 KB（允许空文本）")
     return {"id": uuid.uuid4().hex[:12], "type": "python", "title": title.strip(), "text": title.strip(),
-            "description": description, "examples": [{k: c[k] for k in ("input", "output")} for c in examples],
+            "description": description, "reference_code":string("reference_code",32768,False),
+            "explanation":string("explanation",3000,False), "examples": [{k: c[k] for k in ("input", "output")} for c in examples],
             "test_cases": [{k: c[k] for k in ("input", "output")} for c in cases],
             "limits": dict(LIMITS)}
 

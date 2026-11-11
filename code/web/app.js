@@ -1,10 +1,14 @@
 import {teacherProgramming, bindTeacherProgramming, programmingPage, programmingRecord} from "/static/programming.js";
 import {quizPage} from "/static/ai-quiz.js";
 import {analysisLink, analysisPage} from "/static/analysis.js";
-import { esc, icon, number, radarCard } from "/static/ui.js";
-import { analyticsPage, personalProfilePage, reviewCenter } from "/static/learning-pages.js";
+import { esc, icon, number, radarCard, assignmentSubmissionText } from "/static/ui.js";
+import { analyticsPage, reviewCenter } from "/static/learning-pages.js";
 import { assignmentsPage, assignmentDetailPage, gradebookPage, studentDetailPage,
          announcementsPage } from "/static/course-pages.js";
+import {teachingCoursesPage, courseLabel} from "/static/teaching-courses.js";
+import {learningFilePage} from "/static/learning-file.js";
+import {workspaceNav, teachingAiPage} from "/static/teacher-workspace.js";
+import {assignmentBuilderPage} from "/static/assignment-builder.js";
 import { mountVideo } from "/static/video.js";
 import { liveQuizPage } from "/static/live-quiz.js";
 import { initializeApiKey } from "/static/ai-key.js";
@@ -65,10 +69,14 @@ function tell(message) {
   tell.timer = setTimeout(() => { node.hidden = true; }, 5000);
 }
 function nav() {
-  const current = view => page === view || (view === "review-center" && ["review", "wrong"].includes(page));
+  const current = view => page === view
+    || (view === "teaching" && user?.role === "teacher" && ["edit-course","assignment-builder","new-course","assignments","teaching-ai","gradebook","announcements"].includes(page))
+    || (view === "learning-center" && user?.role === "student" && ["profile","records"].includes(page))
+    || (view === "assignments" && page === "assignment")
+    || (view === "review-center" && ["review","wrong"].includes(page));
   const item = (view,label,graphic) => link(view, `${icon(graphic)}<span>${label}</span>`, `nav-link${current(view) ? " active" : ""}`);
   return `<header class="nav"><a class="brand" href="${esc(user ? href("dashboard") : "/")}"><span class="brand-mark">${icon("layers")}</span><span>知学<small>LEARN WITH PURPOSE</small></span></a>
-    ${user ? `<nav class="nav-links" aria-label="主导航">${item("dashboard", "工作台", "home")}${item("video", "视频学习", "video")}${item("live-quiz", "课堂抢答", "target")}${item("assignments", "作业", "book")}${user.role === "teacher" ? item("gradebook", "成绩册", "chart") : item("review-center", "错题与复习", "review") + item("profile", "学习画像", "chart")}${item("records", user.role === "teacher" ? "学习分析" : "学习记录", "book")}${item("account", "账号", "user")}</nav><div class="nav-account"><a class="nav-bell" href="${esc(href("announcements"))}" target="_blank" rel="noopener" aria-label="公告">${icon("bell")}${unreadAnnouncements ? `<span class="nav-badge">${unreadAnnouncements > 99 ? "99+" : unreadAnnouncements}</span>` : ""}</a><span class="avatar small">${esc(user.name.slice(0,1))}</span><span class="identity">${esc(user.name)}<small>${user.role === "teacher" ? "教师 · 跨专业授课" : esc(majorName(user.major_id))}</small></span><button class="ghost" id="logout">退出</button></div>` : '<span class="identity">课程、练习与成长，连接在一起。</span>'}</header><div class="notice" role="status" hidden></div>`;
+    ${user ? `<nav class="nav-links" aria-label="主导航">${item("dashboard", "工作台", "home")}${item("video", "视频学习", "video")}${item("live-quiz", "课堂抢答", "target")}${user.role === "teacher" ? item("teaching", "课程与作业", "book") + item("records", "学情总览", "chart") : item("assignments", "作业", "book") + item("review-center", "错题与复习", "review") + item("learning-center", "学习档案", "chart")}${item("account", "账号", "user")}</nav><div class="nav-account"><a class="nav-bell" href="${esc(href("announcements"))}" target="_blank" rel="noopener" aria-label="公告">${icon("bell")}${unreadAnnouncements ? `<span class="nav-badge">${unreadAnnouncements > 99 ? "99+" : unreadAnnouncements}</span>` : ""}</a><span class="avatar small">${esc(user.name.slice(0,1))}</span><span class="identity">${esc(user.name)}<small>${user.role === "teacher" ? "教师 · 跨专业授课" : esc(majorName(user.major_id))}</small></span><button class="ghost" id="logout">退出</button></div>` : '<span class="identity">课程、练习与成长，连接在一起。</span>'}</header><div class="notice" role="status" hidden></div>`;
 }
 function layout(content, title) {
   document.title = `${title} · 知学`;
@@ -83,7 +91,7 @@ function recordList(items, teacher = false) {
   return `<div class="record-list">${items.map(r => {
     const pending = Boolean(r.pending_release);
     const score = pending ? '<span class="tag attention">待发布成绩</span>' : `<strong class="score">${r.score} 分</strong>`;
-    return `<div class="record-row"><div><b>${teacher ? esc(r.student) + " · " : ""}${esc(r.course_name || r.course_id)}</b><small>${r.demo ? "演示记录 · " : ""}${date(r.submitted_at)} · ${r.type === "ai_quiz" ? "AI 自测 · " : ""}${pending ? "成绩待教师发布" : r.type === "python" ? `Python 编程 · 用例通过 ${r.passed_cases}/${r.total_cases}` : `答对 ${r.correct_count}/${r.total} 题`}${r.chapter_title ? ` · ${esc(r.chapter_title)}` : ""}${r.late ? " · 迟交" : ""}</small>${r.type === "python" ? programmingRecord(r) : ""}</div><div class="record-actions">${score}${pending ? "" : analysisLink(link, r.id)}</div></div>`;
+    return `<div class="record-row"><div><b>${teacher ? esc(r.student) + " · " : ""}${esc(r.course_name || r.course_id)}${r.teaching_class && !(r.course_name || "").includes(r.teaching_class) ? ` · ${esc(r.teaching_class)}` : ""}</b><small>${r.demo ? "演示记录 · " : ""}${date(r.submitted_at)} · ${r.type === "ai_quiz" ? "AI 自测 · " : r.assignment_id ? "作业提交 · " : "自主练习 · "}${pending ? "成绩待教师发布" : r.answers_locked ? "答案待解锁" : r.type === "python" ? `Python 编程 · 用例通过 ${r.passed_cases}/${r.total_cases}` : `答对 ${r.correct_count}/${r.total} 题`}${r.assignment_title ? ` · 作业：${esc(r.assignment_title)}` : r.chapter_title ? ` · ${esc(r.chapter_title)}` : ""}${r.late ? " · 迟交" : ""}</small>${r.type === "python" ? programmingRecord(r) : ""}</div><div class="record-actions">${score}${!teacher && r.assignment_id ? link("assignment", "查看作业", "ghost", {assignment:r.assignment_id}) : ""}${pending || (!teacher && r.answers_locked) ? "" : analysisLink(link, r.id, r.course_id, r.assignment_id ? "assignment" : "self_practice")}</div></div>`;
   }).join("")}</div>`;
 }
 function bindForm(selector, action) {
@@ -172,23 +180,23 @@ async function dashboard() {
   unreadAnnouncements = inbox.unread_count || 0;
   const due = wrong.filter(item => item.status !== "mastered" && new Date(item.next_review_at) <= new Date()).length;
   const openAssignments = assignments.filter(item => item.can_start).length;
-  const stats = teacher ? [[courses.length,"我的课程"],[extra.overview.student_count,"面向学生"],
+  const stats = teacher ? [[courses.length,"我的教学班"],[extra.overview.student_count,"面向学生"],
     [extra.overview.submission_count,"正式提交"],[number(extra.overview.average_score),"平均成绩"]]
     : [[courses.length,"可学课程"],[openAssignments,"待完成作业"],[due,"今日待复习"],[number(extra.profile.average_score),"平均成绩"]];
   const courseCards = courses.map(course => {
     const entries = logs.filter(record => record.course_id === course.id);
     const chapterIds = new Set(entries.flatMap(record => [record.chapter_id, ...(record.details || []).map(detail => detail.chapter_id)]).filter(Boolean));
     const completed = course.chapters.filter(chapter => chapterIds.has(chapter.id)).length;
-    const category = course.category === "deep-learning" ? "deep-learning" : "python";
+    const category = ["deep-learning", "web", "machine-learning"].includes(course.category) ? course.category : "python";
     const statusLabel = course.status === "published" ? "已发布" : course.status === "archived" ? "已归档" : "草稿";
     const questionCount = course.questions.filter(q => q.status !== "retired").length
       + (course.programming_questions || []).filter(q => q.status !== "retired").length;
-    return `<article class="course-card"><div class="course-cover"><img src="/static/course-${category}.svg" alt="" loading="lazy"><span class="tag ${teacher ? course.status : "neutral"}">${teacher ? statusLabel : course.level || "课程学习"}</span></div><div class="course-content"><div class="course-audience">${course.major_ids.length === majors.length ? '<span class="course-kind">所有专业</span>' : course.major_ids.map(mid => `<span class="course-kind">${esc(majorName(mid))}</span>`).join("")}${course.demo ? '<span class="demo-label">示例课程</span>' : ""}</div><h3>${esc(course.title)}</h3><p>${esc(course.description || "打开课程，开始你的下一段学习。")}</p><span class="meta">${esc(course.teacher)} · ${course.chapters.length} 章 · ${questionCount} 道练习</span>${teacher ? `<p class="course-progress-label">${course.resources.length} 份学习资源 · ${entries.length} 次提交</p>` : `<div class="course-progress-label"><span>已练习 ${completed} / ${course.chapters.length} 章</span><span>${Math.round(completed/Math.max(1,course.chapters.length)*100)}%</span></div><progress class="course-progress" max="${Math.max(1,course.chapters.length)}" value="${completed}" aria-label="${esc(course.title)}章节练习进度"></progress>`}${link(teacher ? "edit-course" : "course", teacher ? (course.status === "archived" ? "查看归档课程" : "管理课程") : "继续学习", "course-link", {course:course.id})}</div></article>`;
+    return `<article class="course-card"><div class="course-cover"><img src="/static/course-${category}.svg" alt="" loading="lazy"><span class="tag ${teacher ? course.status : "neutral"}">${teacher ? statusLabel : course.level || "课程学习"}</span></div><div class="course-content"><div class="course-audience">${course.major_ids.length === majors.length ? '<span class="course-kind">所有专业</span>' : course.major_ids.map(mid => `<span class="course-kind">${esc(majorName(mid))}</span>`).join("")}${course.demo ? '<span class="demo-label">示例课程</span>' : ""}</div><h3>${esc(course.title)}</h3>${course.teaching_class ? `<span class="dashboard-class-label">${esc(course.teaching_class)} · ${esc(course.term || "")}</span>` : ""}<p>${esc(course.description || "打开课程，开始你的下一段学习。")}</p><span class="meta">${esc(course.teacher)} · ${course.chapters.length} 章 · ${questionCount} 道练习</span>${teacher ? `<p class="course-progress-label">${course.resources.length} 份学习资源 · ${entries.length} 次提交</p>` : `<div class="course-progress-label"><span>已练习 ${completed} / ${course.chapters.length} 章</span><span>${Math.round(completed/Math.max(1,course.chapters.length)*100)}%</span></div><progress class="course-progress" max="${Math.max(1,course.chapters.length)}" value="${completed}" aria-label="${esc(course.title)}章节练习进度"></progress>`}${link(teacher ? "edit-course" : "course", teacher ? (course.status === "archived" ? "查看归档课程" : "进入教学空间") : "继续学习", "course-link", {course:course.id})}</div></article>`;
   }).join("");
   const assignmentCards = assignments.filter(item => item.can_start || item.pending_release || item.latest_submission_id)
-    .slice(0, 3).map(item => `<article class="assignment-card"><div class="assignment-card-head"><span class="tag ${assignmentStateClass(assignmentDisplayState(item))}">${assignmentStateLabel(assignmentDisplayState(item))}</span><small>${esc(item.course_name)}</small></div><h3>${esc(item.title)}</h3><p class="muted">${item.due_at ? `截止 ${date(item.due_at)}` : "未设置截止时间"} · 已提交 ${item.attempts}/${item.max_attempts} 次${item.best_score !== null ? ` · 最高 ${item.best_score} 分` : ""}</p><div class="actions">${link("assignment", item.latest_submission_id ? "查看结果" : "去完成", "secondary", {assignment:item.id})}</div></article>`).join("");
+    .slice(0, 3).map(item => `<article class="assignment-card"><div class="assignment-card-head"><span class="tag ${assignmentStateClass(assignmentDisplayState(item))}">${assignmentStateLabel(assignmentDisplayState(item))}</span><small>${esc(item.course_name)}</small></div><h3>${esc(item.title)}</h3><p class="muted">${item.due_at ? `截止 ${date(item.due_at)}` : "未设置截止时间"} · ${assignmentSubmissionText(item)}${item.best_score !== null ? ` · 最高 ${item.best_score} 分` : ""}</p><div class="actions">${link("assignment", item.latest_submission_id ? (item.can_start ? "继续作答" : item.answers_locked ? "查看详情" : "查看答案") : "去完成", "secondary", {assignment:item.id})}</div></article>`).join("");
   const announcementCards = (inbox.items || []).slice(0, 2).map(item => `<article class="announcement-card ${item.read ? "" : "unread"}"><div class="announcement-card-head"><span class="tag ${item.pinned ? "attention" : "neutral"}">${item.pinned ? "置顶公告" : esc(item.course_name)}</span><small>${date(item.created_at)}</small></div><h3>${esc(item.title)}</h3><p>${esc(item.body).replace(/\n/g, "<br>")}</p></article>`).join("");
-  layout(`<div class="hero dashboard-hero"><div><span class="eyebrow">${teacher ? "TEACH WITH INSIGHT" : "A LITTLE PROGRESS, EVERY DAY"}</span><h1>${esc(user.name)}，${teacher ? "让教学更有方向。" : "今天也向前一步。"}</h1><p class="muted">${teacher ? "跨专业发布课程，用真实练习反馈看见每位学生的成长。" : `${esc(majorName(user.major_id))} · 从一节课程、一份练习开始，把知识变成自己的能力。`}</p><div class="hero-actions">${teacher ? link("new-course", `${icon("plus")}创建课程`, "primary") + link("assignments", "作业管理") + link("gradebook", "成绩册") : link(due ? "review-center" : "profile", `${icon(due ? "review" : "chart")}${due ? `复习 ${due} 道到期错题` : "查看我的学习画像"}`, "primary") + link("assignments", "我的作业") + link("video", "整理课程视频")}</div></div><div class="hero-art" aria-hidden="true">${icon(teacher ? "chart" : "book")}<span class="art-orbit orbit-one"></span><span class="art-orbit orbit-two"></span><span class="art-caption">${teacher ? "每一次反馈都有价值" : "学有所获，学有所长"}</span></div></div><div class="dashboard-stats">${stats.map(([value,label]) => `<div><b>${value}</b><span>${label}</span></div>`).join("")}</div><section><div class="section-title"><div><span class="eyebrow">${teacher ? "MY TEACHING" : "MY COURSES"}</span><h2>${teacher ? "我的教学课程" : "为你开放的课程"}</h2></div><button class="ghost" id="refresh">${icon("refresh")}刷新</button></div><div class="course-grid">${courseCards || '<div class="empty-state">暂无课程，请联系教师发布面向你所在专业的课程。</div>'}</div></section>${!teacher ? `<section><div class="section-title"><div><span class="eyebrow">ASSIGNMENTS</span><h2>我的作业</h2></div>${link("assignments", "全部作业", "text-link")}</div><div class="assignment-grid">${assignmentCards || '<div class="empty">暂无待完成作业。</div>'}</div></section><section><div class="section-title"><div><span class="eyebrow">ANNOUNCEMENTS</span><h2>最新公告</h2></div>${link("announcements", "全部公告", "text-link")}</div><div class="announcement-list">${announcementCards || '<div class="empty">暂无公告。</div>'}</div></section><div class="learning-shortcuts"><a href="${esc(href("review-center"))}">${icon("review")}<div><b>错题与复习</b><small>把薄弱知识点，变成下一次的进步</small></div>${icon("arrow")}</a><a href="${esc(href("profile"))}">${icon("chart")}<div><b>我的学习雷达</b><small>从四个维度，了解学习状态</small></div>${icon("arrow")}</a></div>` : ""}<section><div class="section-title"><div><span class="eyebrow">RECENT ACTIVITY</span><h2>${teacher ? "最近的学生提交" : "最近的学习记录"}</h2></div>${link("records", "全部记录", "text-link")}</div>${recordList(logs.slice(0,5),teacher)}</section>`,teacher ? "教师工作台" : "学生工作台");
+  layout(`<div class="hero dashboard-hero"><div><span class="eyebrow">${teacher ? "TEACH WITH INSIGHT" : "A LITTLE PROGRESS, EVERY DAY"}</span><h1>${esc(user.name)}，${teacher ? "让教学更有方向。" : "今天也向前一步。"}</h1><p class="muted">${teacher ? "跨专业发布课程，用真实练习反馈看见每位学生的成长。" : `${esc(majorName(user.major_id))} · 从一节课程、一份练习开始，把知识变成自己的能力。`}</p><div class="hero-actions">${teacher ? link("new-course", `${icon("plus")}创建课程`, "primary") + link("teaching", "课程与作业") : link(due ? "review-center" : "learning-center", `${icon(due ? "review" : "chart")}${due ? `复习 ${due} 道到期错题` : "查看我的学习档案"}`, "primary") + link("assignments", "我的作业") + link("video", "整理课程视频")}</div></div><div class="hero-art" aria-hidden="true">${icon(teacher ? "chart" : "book")}<span class="art-orbit orbit-one"></span><span class="art-orbit orbit-two"></span><span class="art-caption">${teacher ? "每一次反馈都有价值" : "学有所获，学有所长"}</span></div></div><div class="dashboard-stats">${stats.map(([value,label]) => `<div><b>${value}</b><span>${label}</span></div>`).join("")}</div><section><div class="section-title"><div><span class="eyebrow">${teacher ? "MY TEACHING" : "MY COURSES"}</span><h2>${teacher ? "我的教学班" : "为你开放的课程"}</h2></div><button class="ghost" id="refresh">${icon("refresh")}刷新</button></div><div class="course-grid">${courseCards || '<div class="empty-state">暂无课程，请联系教师发布面向你所在专业的课程。</div>'}</div></section>${!teacher ? `<section><div class="section-title"><div><span class="eyebrow">ASSIGNMENTS</span><h2>我的作业</h2></div>${link("assignments", "全部作业", "text-link")}</div><div class="assignment-grid">${assignmentCards || '<div class="empty">暂无待完成作业。</div>'}</div></section><section><div class="section-title"><div><span class="eyebrow">ANNOUNCEMENTS</span><h2>最新公告</h2></div>${link("announcements", "全部公告", "text-link")}</div><div class="announcement-list">${announcementCards || '<div class="empty">暂无公告。</div>'}</div></section><div class="learning-shortcuts"><a href="${esc(href("review-center"))}">${icon("review")}<div><b>错题与复习</b><small>把薄弱知识点，变成下一次的进步</small></div>${icon("arrow")}</a><a href="${esc(href("learning-center"))}">${icon("chart")}<div><b>我的学习档案</b><small>查看个人画像、课程进度与提交记录</small></div>${icon("arrow")}</a></div>` : ""}<section><div class="section-title"><div><span class="eyebrow">RECENT ACTIVITY</span><h2>${teacher ? "最近的学生提交" : "最近的自主练习"}</h2></div>${link(teacher ? "records" : "learning-center", "全部记录", "text-link", teacher ? {} : {tab:"practice"})}</div>${recordList((teacher ? logs : logs.filter(r => !r.assignment_id)).slice(0,5),teacher)}</section>${!teacher ? `<section><div class="section-title"><h2>最近的作业记录</h2>${link("learning-center", "全部作业记录", "text-link", {tab:"assignments"})}</div>${recordList(logs.filter(r => r.assignment_id).slice(0,5),false)}</section>` : ""}`,teacher ? "教师工作台" : "学生工作台");
   root.querySelector("#refresh").onclick = () => dashboard().catch(error => tell(error.message));
 }
 
@@ -204,14 +212,14 @@ async function learningPage() {
     const questions = course.questions.filter(q => q.chapter_id === ch.id);
     const programming = (course.programming_questions || []).filter(q => q.chapter_id === ch.id);
     const chapterAssignments = assignments.filter(item => item.course_id === course.id && item.chapter_id === ch.id);
-    const assignmentBlock = chapterAssignments.length ? `<div class="chapter-assignments">${chapterAssignments.map(item => `<article class="assignment-card compact"><div class="assignment-card-head"><span class="tag ${assignmentStateClass(assignmentDisplayState(item))}">${assignmentStateLabel(assignmentDisplayState(item))}</span><small>${esc(item.course_name)}</small></div><div class="assignment-card-body"><b>${esc(item.title)}</b><p class="muted">${item.due_at ? `截止 ${date(item.due_at)}` : "未设置截止时间"} · 已提交 ${item.attempts}/${item.max_attempts} 次${item.pending_release ? " · 待发布成绩" : ""}</p></div><div class="actions">${item.can_start ? link("assignment", "开始作业", "primary", {assignment:item.id}) : link("assignment", "查看作业", "secondary", {assignment:item.id})}</div></article>`).join("")}</div>` : "";
+    const assignmentBlock = chapterAssignments.length ? `<div class="chapter-assignments">${chapterAssignments.map(item => `<article class="assignment-card compact"><div class="assignment-card-head"><span class="tag ${assignmentStateClass(assignmentDisplayState(item))}">${assignmentStateLabel(assignmentDisplayState(item))}</span><small>${esc(item.course_name)}</small></div><div class="assignment-card-body"><b>${esc(item.title)}</b><p class="muted">${item.due_at ? `截止 ${date(item.due_at)}` : "未设置截止时间"} · ${assignmentSubmissionText(item)}${item.pending_release ? " · 待发布成绩" : ""}</p></div><div class="actions">${item.can_start ? link("assignment", "开始作业", "primary", {assignment:item.id}) : link("assignment", "查看作业", "secondary", {assignment:item.id})}</div></article>`).join("")}</div>` : "";
     const questionBlock = questions.length
       ? (preview
-        ? `<div class="quiz preview-quiz"><p class="preview-note">学生视角预览：答案与解析已隐藏，提交按钮不可用。</p><div class="questions">${questions.map((q, i) => `<fieldset class="question" disabled><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" disabled> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}</fieldset>`).join("")}</div></div>`
-        : `<form class="quiz" data-chapter="${esc(ch.id)}"><div class="questions">${questions.map((q, i) => `<fieldset class="question"><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交本章练习</button></div><div class="quiz-result" role="status"></div></form>`)
+        ? `<div class="quiz preview-quiz"><p class="preview-note">学生视角预览：可查看题库标答与解析，不能提交。</p><div class="questions">${questions.map((q, i) => `<fieldset class="question" disabled><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" disabled> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div></div>`
+        : `<form class="quiz" data-chapter="${esc(ch.id)}"><div class="questions">${questions.map((q, i) => `<fieldset class="question"><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details class="bank-solution"><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交本章练习</button></div><div class="quiz-result" role="status"></div></form>`)
       : '<p class="muted">本章暂无单选题。</p>';
     return `<section class="chapter"><div class="section-title"><div><span class="eyebrow">CHAPTER ${ci + 1}</span><h2>${esc(ch.title)}</h2></div><span class="tag">${questions.length} 道单选 · ${programming.length} 道编程</span></div>
-      ${preview ? '<p class="preview-note">此页面为学生视角预览，不显示正确答案、解析和隐藏用例。</p>' : ""}
+      ${preview ? '<p class="preview-note">此页面为学生视角预览，可查看自主练习标答，隐藏判题用例。</p>' : ""}
       ${assignmentBlock}
       ${resources.length ? `<div class="resource-list">${resources.map(r => `<div class="resource"><div><b>${esc(r.name)}</b><small>${esc(r.kind)}</small></div>${r.job_id ? `<div class="actions"><a class="secondary" href="${fileUrl(`/api/jobs/${encodeURIComponent(r.job_id)}/files/pdf?preview=true`)}" target="_blank" rel="noopener">打开课件 ↗</a>${course.teacher_id === user.id ? link("video", "提取结果", "ghost", {job:r.job_id}) : ""}</div>` : '<span class="muted">资源说明</span>'}</div>`).join("")}</div>` : ""}
       ${resources.filter(r => r.content).map(r => `<details class="study-note" open><summary>${icon("book")}${esc(r.name)}</summary><div>${r.content.split("\n").map(paragraph => `<p>${esc(paragraph)}</p>`).join("")}${r.code ? `<pre><code>${esc(r.code)}</code></pre>` : ""}</div></details>`).join("")}
@@ -219,7 +227,7 @@ async function learningPage() {
       ${programming.map(q => `<div class="python-question-link"><div><b>${esc(q.title)}</b><small>Python 编程 · 3 秒 / 256 MB</small></div>${preview ? '<span class="tag neutral">学生可编写代码</span>' : link("programming", "编写代码", "primary", {course:course.id, question:q.id})}</div>`).join("")}
     </section>`;
   }).join("");
-  layout(`<div class="learning-panel">${preview ? '<div class="preview-banner">学生视角预览 · 不显示答案与解析，不可提交</div>' : ""}<span class="eyebrow">${esc(course.teacher)} · ${esc(course.chapters.length)} 个章节 · COURSE LEARNING</span><h1>${esc(course.title)}</h1><p class="muted">${esc(course.description)}</p>${chapterBlocks}<div class="actions">${preview ? link("edit-course", "返回课程编辑", "primary", {course:course.id}) : link("records", "查看学习进度")}</div></div>`, `${course.title}${preview ? " · 预览" : ""}`);
+  layout(`<div class="learning-panel">${preview ? '<div class="preview-banner">学生视角预览 · 不可提交</div>' : ""}<span class="eyebrow">${esc(course.teacher)} · ${esc(course.chapters.length)} 个章节 · COURSE LEARNING</span><h1>${esc(course.title)}</h1>${course.teaching_class ? `<p class="dashboard-class-label">${esc(course.teaching_class)} · ${esc(course.term || "")}</p>` : ""}<p class="muted">${esc(course.description)}</p>${chapterBlocks}<div class="actions">${preview ? link("edit-course", "返回课程编辑", "primary", {course:course.id}) : link("learning-center", "查看学习档案")}</div></div>`, `${course.title}${preview ? " · 预览" : ""}`);
   if (preview) return;
   root.querySelectorAll("form.quiz").forEach(form => {
     form.onsubmit = async event => {
@@ -239,15 +247,15 @@ async function learningPage() {
 }
 
 function audienceFields(selected) {
-  return `<fieldset class="audience-fields"><legend>面向学生专业（可多选）</legend><p class="muted">教师可跨专业授课。同一门课程共享内容，各学生记录独立保存。</p><div class="audience-options">${majors.map(major => `<label><input type="checkbox" name="major_ids" value="${esc(major.id)}" ${selected.includes(major.id) ? "checked" : ""}><span>${esc(major.name)}</span></label>`).join("")}</div></fieldset>`;
+  return `<fieldset class="audience-fields"><legend>教学班学生专业（单选）</legend><p class="muted">一个教学班对应一个学生专业。同一课程可为不同专业分别开班，教师可以跨专业授课。</p>${selected.length > 1 ? '<p class="muted">请为这个原共享课程指定一个专业，其他专业可另建教学班。</p>' : ""}<div class="audience-options">${majors.map(major => `<label><input type="radio" name="major_ids" value="${esc(major.id)}" ${selected.length === 1 && selected[0] === major.id ? "checked" : ""} required><span>${esc(major.name)}</span></label>`).join("")}</div></fieldset>`;
 }
 
 async function newCoursePage() {
   if (user.role !== "teacher") throw new Error("只有教师可以创建课程");
-  layout(`<div class="page-heading"><div><span class="eyebrow">CREATE A COURSE</span><h1>把知识，分享给更多学生</h1><p class="muted">先创建课程并选择面向专业，再添加章节、讲义与练习。</p></div></div><div class="form-card wide-form"><form id="new-course"><label>课程名称<input name="title" maxlength="80" required placeholder="例如：深度学习基础"></label><label>课程简介<textarea name="description" maxlength="300" placeholder="介绍课程目标、适合对象与主要内容"></textarea></label>${audienceFields(majors.map(major => major.id))}<div class="actions"><button class="primary" type="submit">创建课程草稿 ${icon("arrow")}</button></div><div id="created" role="status"></div></form></div>`, "创建课程");
+  layout(`<div class="page-heading"><div><span class="eyebrow">CREATE A COURSE</span><h1>把知识，分享给更多学生</h1><p class="muted">填写课程与教学班信息，再添加章节、讲义与练习。同一课程的不同班使用相同课程代码归组。</p></div></div><div class="form-card wide-form"><form id="new-course"><label>课程名称<input name="title" maxlength="80" required value="${esc(params.get("title") || "")}" placeholder="例如：深度学习基础"></label><div class="editor-fields"><label>课程代码<input name="course_code" maxlength="40" value="${esc(params.get("subject") || "")}" placeholder="例如 PY101，同一课程的不同班使用相同代码"></label><label>教学班<input name="teaching_class" maxlength="60" required placeholder="例如：2026级 02班"></label><label>学期<input name="term" maxlength="40" value="${esc(params.get("term") || "")}" placeholder="例如：2026年秋季"></label></div><label>课程简介<textarea name="description" maxlength="300" placeholder="介绍课程目标、适合对象与主要内容"></textarea></label>${audienceFields([])}<div class="actions"><button class="primary" type="submit">创建课程草稿 ${icon("arrow")}</button></div><div id="created" role="status"></div></form></div>`, "创建课程");
   bindForm("#new-course", async (data,form) => {
     const major_ids = new FormData(form).getAll("major_ids");
-    if (!major_ids.length) throw new Error("请至少选择一个面向的学生专业");
+    if (!major_ids.length) throw new Error("请选择本教学班的学生专业");
     const course = await post("/api/courses", {...data, major_ids});
     root.querySelector("#created").innerHTML = `<div class="result"><h3>课程草稿已创建</h3><p>${esc(course.title)}</p>${link("edit-course", "继续添加章节与练习", "primary", {course:course.id})}</div>`;
     form.querySelector('[type="submit"]').hidden = true;
@@ -257,10 +265,11 @@ async function newCoursePage() {
 async function editCoursePage() {
   if (user.role !== "teacher") throw new Error("只有教师可以编辑课程");
   const id = encodeURIComponent(params.get("course") || "");
-  const [course, jobs, assignments] = await Promise.all([
-    api(`/api/courses/${id}`), api("/api/jobs"), api(`/api/courses/${id}/assignments`).catch(() => [])]);
+  const [course, jobs] = await Promise.all([api(`/api/courses/${id}`), api("/api/jobs")]);
   if (course.teacher_id !== user.id) throw new Error("只能编辑自己创建的课程");
   const archived = course.status === "archived";
+  const sectionKeys = ["settings", "content", "questions"];
+  let section = sectionKeys.includes(params.get("section")) ? params.get("section") : "content";
   const chapters = course.chapters || [];
   const chapterName = cid => chapters.find(c => c.id === cid)?.title || "未分章节";
   const chapterOptionsFor = selected => chapters.map(c => `<option value="${esc(c.id)}" ${c.id === selected ? "selected" : ""}>${esc(c.title)}</option>`).join("");
@@ -295,33 +304,48 @@ async function editCoursePage() {
       </form></details></div>`;
   }).join("");
   const questionForm = q => `<form class="edit-question" data-question="${esc(q.id)}">
-    <label>题目<input name="text" maxlength="300" value="${esc(q.text)}" required></label>
-    <label>选项（用 | 分隔）<input name="options" value="${esc(q.options.join(" | "))}" required></label>
+    <label>题目<textarea name="text" maxlength="3000" required>${esc(q.text)}</textarea></label>
+    <div class="editor-fields">${q.options.map((option,i) => `<label>选项 ${String.fromCharCode(65+i)}<input name="option-${i}" maxlength="1000" value="${esc(option)}" required></label>`).join("")}</div>
     <div class="editor-fields"><label>正确答案<select name="answer">${q.options.map((option, oi) => `<option value="${oi}" ${q.answer === oi ? "selected" : ""}>${String.fromCharCode(65 + oi)}. ${esc(option)}</option>`).join("")}</select></label>
     <label>章节<select name="chapter_id">${chapterOptionsFor(q.chapter_id)}</select></label>
     <label>知识点<input name="knowledge_point" maxlength="50" value="${esc(kpName(q.knowledge_point_id))}" placeholder="可留空"></label></div>
-    <label>解析<textarea name="explanation" maxlength="2000">${esc(q.explanation || "")}</textarea></label>
+    <label>解析<textarea name="explanation" maxlength="3000">${esc(q.explanation || "")}</textarea></label>
     <div class="actions"><button class="secondary" type="submit">保存题目</button><button class="ghost danger" type="button" data-retire-question="${esc(q.id)}">停用</button></div>
   </form>`;
-  const questionRows = activeQuestions.map((q, index) => `<div class="editor-item"><details><summary><b>${index + 1}. ${esc(q.text)}</b><small>答案：${esc(q.options[q.answer])} · ${esc(chapterName(q.chapter_id))}${q.knowledge_point_id ? ` · ${esc(kpName(q.knowledge_point_id))}` : ""}</small></summary>
+  const questionRows = activeQuestions.map((q, index) => `<div class="editor-item" data-bank-chapter="${esc(q.chapter_id)}"><details><summary><b>${index + 1}. ${esc(q.text)}</b><small>答案：${esc(q.options[q.answer])} · ${esc(chapterName(q.chapter_id))}${q.knowledge_point_id ? ` · ${esc(kpName(q.knowledge_point_id))}` : ""}</small></summary>
     ${questionForm(q)}
     <div class="item-actions"><button class="ghost small" type="button" data-move-question="${esc(q.id)}" data-direction="-1" ${index === 0 ? "disabled" : ""}>上移</button><button class="ghost small" type="button" data-move-question="${esc(q.id)}" data-direction="1" ${index === activeQuestions.length - 1 ? "disabled" : ""}>下移</button></div>
   </details></div>`).join("");
   const retiredRows = retiredQuestions.length ? `<details class="retired-list"><summary>已停用题目 ${retiredQuestions.length} 道（学生端不显示）</summary>${retiredQuestions.map(q => `<div class="editor-item retired-item"><div class="editor-item-head"><div><b>${esc(q.text)}</b><small>已停用 · ${esc(chapterName(q.chapter_id))}</small></div><button class="ghost small" type="button" data-restore-question="${esc(q.id)}">恢复题目</button></div>${questionForm(q)}</div>`).join("")}</details>` : "";
-  layout(`<div class="learning-panel"><span class="eyebrow">COURSE EDITOR</span><h1>${esc(course.title)}</h1><p class="muted">${esc(course.description)}</p>
-    <div class="actions"><span class="tag ${archived ? "neutral" : course.status}">${statusText}</span>${link("course", "学生视角预览", "secondary", {course:course.id, preview:"1"})}${link("assignments", `作业管理（${assignments.length}）`, "secondary", {course:course.id})}${link("announcements", "公告管理", "secondary", {course:course.id})}<button class="ghost" id="duplicate-course" ${archived ? "disabled" : ""}>复制课程</button>${archived ? '<button class="primary" id="restore-course">恢复课程</button>' : '<button class="ghost danger" id="archive-course">归档课程</button>'}<button class="ghost" id="refresh">${icon("refresh")}刷新</button></div>
+  layout(`${workspaceNav(context(), course, section)}<div class="course-editor-layout"><div class="page-heading"><div><span class="eyebrow">COURSE WORKSPACE</span><h1 id="course-panel-title"></h1><p class="muted" id="course-panel-description"></p></div><div class="actions">${link("course", "学生视角预览", "secondary", {course:course.id, preview:"1"})}<button class="ghost" id="refresh">${icon("refresh")}刷新</button></div></div>
     ${archived ? '<p class="warning">课程已归档，学生无法访问；恢复后可继续编辑。</p>' : ""}
     <div id="course-action-result" role="status"></div>
-    <section class="editor"><h2>课程信息</h2><form id="course-settings"><div class="editor-fields"><label>课程名称<input name="title" maxlength="80" value="${esc(course.title)}" required></label><label>分类<input name="category" maxlength="40" value="${esc(course.category || "")}" placeholder="python / deep-learning"></label><label>难度<input name="level" maxlength="40" value="${esc(course.level || "")}" placeholder="零基础 / 进阶"></label><label>学时<input name="duration" maxlength="40" value="${esc(course.duration || "")}" placeholder="约 3 小时"></label></div><label>课程简介<textarea name="description" maxlength="300">${esc(course.description || "")}</textarea></label><div class="actions"><button class="secondary" type="submit">保存课程信息</button></div></form></section>
+    <div data-course-panel="settings"><section class="editor"><h2>课程信息</h2><form id="course-settings"><div class="editor-fields"><label>课程名称<input name="title" maxlength="80" value="${esc(course.title)}" required></label><label>分类<input name="category" maxlength="40" value="${esc(course.category || "")}" placeholder="python / deep-learning"></label><label>难度<input name="level" maxlength="40" value="${esc(course.level || "")}" placeholder="零基础 / 进阶"></label><label>学时<input name="duration" maxlength="40" value="${esc(course.duration || "")}" placeholder="约 3 小时"></label></div><div class="editor-fields"><label>课程代码<input name="course_code" maxlength="40" value="${esc(course.course_code || "")}" placeholder="同一课程的不同班使用相同代码"></label><label>教学班<input name="teaching_class" maxlength="60" value="${esc(course.teaching_class || "")}" placeholder="例如：2026级 01班"></label><label>学期<input name="term" maxlength="40" value="${esc(course.term || "")}" placeholder="例如：2026年秋季"></label></div><label>课程简介<textarea name="description" maxlength="300">${esc(course.description || "")}</textarea></label><div class="actions"><button class="secondary" type="submit">保存课程信息</button></div></form></section>
     <section class="editor"><h2>课程面向专业</h2><form id="audience-form">${audienceFields(course.major_ids)}<div class="actions"><button class="secondary" type="submit">保存授课范围</button></div></form></section>
-    <section class="editor"><h2>课程章节</h2><p class="muted">支持排序与删除；删除含内容的章节时，可把题目和资源迁移到其他章节。</p><div class="editor-list">${chapterRows || "暂无章节"}</div><form id="chapter-form" class="inline-form"><input name="title" maxlength="50" placeholder="新章节名称，如：第三章 函数" required><button class="secondary" type="submit">新增章节</button></form></section>
-    <section class="editor"><h2>学习资源</h2><div class="editor-list">${resourceRows || "暂无资源"}</div><form id="resource-form"><div class="resource-fields"><label>章节<select name="chapter_id">${chapterOptions}</select></label><label>资源名称<input name="name" maxlength="100" required></label><label>类型<select name="kind"><option>课件</option><option>视频</option><option>文档</option><option>图文讲义</option><option>实验讲义</option></select></label><label>关联提取结果<select name="job_id"><option value="">不关联（仅登记资源说明）</option>${jobs.filter(j => j.status === "completed").map(j => `<option value="${esc(j.id)}">${esc(j.filename)}</option>`).join("")}</select></label></div><label>讲义正文（可选）<textarea name="content" maxlength="8000" placeholder="按换行分段展示给学生"></textarea></label><label>代码示例（可选）<textarea name="code" maxlength="8000"></textarea></label><div class="actions"><button class="secondary" type="submit">添加学习资源</button></div></form></section>
-    <section class="editor"><h2>单选练习题</h2><div class="editor-list">${questionRows || "暂无练习题"}</div>${retiredRows}<form id="question-form"><label>章节<select name="chapter_id">${chapterOptions}</select></label><label>题目<input name="text" maxlength="300" required></label><label>选项（2–4 项，用 | 分隔）<input name="options" placeholder="选项 A | 选项 B | 选项 C | 选项 D" required></label><label>正确答案<select name="answer"><option value="0">第 1 项</option><option value="1">第 2 项</option><option value="2">第 3 项</option><option value="3">第 4 项</option></select></label><label>答案解析（可选）<textarea name="explanation" maxlength="2000" placeholder="解释正确答案与易错点，提交后向学生展示"></textarea></label><label>知识点（可选）<input name="knowledge_point" maxlength="50" placeholder="例如：字符串操作"></label><div class="actions"><button class="secondary" type="submit">添加练习题</button></div></form></section>
-    ${teacherProgramming(course)}
-    <section class="editor"><h2>作业与公告</h2><p class="muted">作业支持截止时间、次数、时限和迟交策略；公告可按未提交或需关注学生定向发送。</p><div class="actions">${link("assignments", `作业管理（${assignments.length}）`, "secondary", {course:course.id})}${link("announcements", "公告管理", "secondary", {course:course.id})}</div></section>
-    <div class="actions"><button class="primary" id="publish" ${course.status === "published" || archived ? "disabled" : ""}>${course.status === "published" ? "课程已发布" : "确认并发布课程"}</button>${link("dashboard", "教师工作台")}</div><p class="muted">发布前至少需要一份资源和一道练习题。</p>
+    <details class="course-maintenance"><summary>更多课程操作：复制与归档</summary><div class="actions"><button class="ghost" id="duplicate-course" ${archived ? "disabled" : ""}>复制课程</button>${archived ? '<button class="primary" id="restore-course">恢复课程</button>' : '<button class="ghost danger" id="archive-course">归档课程</button>'}</div></details></div>
+    <div data-course-panel="content"><section class="editor"><h2>课程章节</h2><p class="muted">支持排序与删除；删除含内容的章节时，可把题目和资源迁移到其他章节。</p><div class="editor-list">${chapterRows || "暂无章节"}</div><form id="chapter-form" class="inline-form"><input name="title" maxlength="50" placeholder="新章节名称，如：第三章 函数" required><button class="secondary" type="submit">新增章节</button></form></section>
+    <section class="editor"><h2>学习资源</h2><div class="editor-list">${resourceRows || "暂无资源"}</div><details class="create-content"><summary>${icon("plus")}添加学习资源</summary><form id="resource-form"><div class="resource-fields"><label>章节<select name="chapter_id">${chapterOptions}</select></label><label>资源名称<input name="name" maxlength="100" required></label><label>类型<select name="kind"><option>课件</option><option>视频</option><option>文档</option><option>图文讲义</option><option>实验讲义</option></select></label><label>关联提取结果<select name="job_id"><option value="">不关联（仅登记资源说明）</option>${jobs.filter(j => j.status === "completed").map(j => `<option value="${esc(j.id)}">${esc(j.filename)}</option>`).join("")}</select></label></div><label>讲义正文（可选）<textarea name="content" maxlength="8000" placeholder="按换行分段展示给学生"></textarea></label><label>代码示例（可选）<textarea name="code" maxlength="8000"></textarea></label><div class="actions"><button class="secondary" type="submit">添加学习资源</button></div></form></details></section></div>
+    <div data-course-panel="questions"><div class="workflow-note"><div><b>课程题库用于学生自主练习</b><p>可手动创建单选题、添加 Python 编程题，或审核 AI 生成的题目后导入。</p></div><div class="actions">${link("teaching-ai", "AI 出题并导入", "secondary", {course:course.id})}<a class="primary" href="${esc(href("assignment-builder", {course:course.id}))}">创建独立作业</a></div></div>
+    <section class="editor"><div class="section-title"><div><h2>单选题库</h2><p class="muted">${activeQuestions.length} 道可用题目</p></div><button class="secondary" id="open-question-create">${icon("plus")}手动创建题目</button></div><details class="create-content" id="manual-question-create"><summary>手动创建单选题</summary><form id="question-form"><label>章节<select name="chapter_id">${chapterOptions}</select></label><label>题目<textarea name="text" maxlength="3000" required></textarea></label><div class="editor-fields">${["A","B","C","D"].map((letter,i) => `<label>选项 ${letter}<input name="option-${i}" maxlength="1000" required></label>`).join("")}</div><label>正确答案<select name="answer"><option value="0">第 1 项</option><option value="1">第 2 项</option><option value="2">第 3 项</option><option value="3">第 4 项</option></select></label><label>答案解析（可选）<textarea name="explanation" maxlength="2000" placeholder="解释正确答案与易错点，提交后向学生展示"></textarea></label><label>知识点（可选）<input name="knowledge_point" maxlength="50" placeholder="例如：字符串操作"></label><div class="actions"><button class="secondary" type="submit">添加练习题</button></div></form></details><div class="question-bank-filters"><label>筛选章节<select id="course-bank-chapter"><option value="all">全部章节</option>${chapterOptions}</select></label><label>搜索题目<input type="search" id="course-bank-search" placeholder="输入题干关键词"></label></div><div class="editor-list">${questionRows || '<div class="empty">暂无单选题，可点击上方按钮创建或使用 AI 出题。</div>'}</div>${retiredRows}</section>
+    <details class="programming-bank"><summary>${icon("book")}Python 编程题库 · ${activeProgramming.length} 道可用题目</summary>${teacherProgramming(course)}</details></div>
+    <div class="course-publish-bar"><div><b>${course.status === "published" ? "课程已对学生开放" : "准备好后，发布课程"}</b><p class="muted">${chapters.length} 个章节 · ${course.resources.length} 份资料 · ${activeQuestions.length + activeProgramming.length} 道题目</p></div><button class="primary" id="publish" ${course.status === "published" || archived ? "disabled" : ""}>${course.status === "published" ? "课程已发布" : "确认并发布课程"}</button></div><p class="muted">发布前至少需要一份资源和一道练习题。</p>
     <dialog id="chapter-delete-dialog" class="platform-dialog"><h2>删除章节</h2><p id="chapter-delete-message"></p><label>把章节内内容移动到<select id="chapter-move-target"></select></label><label class="check-row"><input type="checkbox" id="chapter-cascade"> 直接删除章节内全部题目和资源</label><div class="actions"><button class="ghost" type="button" id="chapter-delete-cancel">取消</button><button class="danger" type="button" id="chapter-delete-confirm">确认删除</button></div></dialog>
-  </div>`, "编辑与发布");
+  </div>`, "课程管理");
+  function showSection(key) {
+    section = key; params.set("section", key);
+    const url = new URL(location.href); url.searchParams.set("section", key); history.replaceState(null, "", url);
+    root.querySelectorAll("[data-course-panel]").forEach(panel => { panel.hidden = panel.dataset.coursePanel !== key; });
+    root.querySelectorAll("[data-workspace-tab]").forEach(tab => { const active = tab.dataset.workspaceTab === key; tab.classList.toggle("active", active); if (active) tab.setAttribute("aria-current", "page"); else tab.removeAttribute("aria-current"); });
+    const labels = {settings:["课程设置", "维护课程信息与学生专业范围。"], content:["章节与学习资料", "按章节整理课程内容，添加学生可阅读的讲义与视频课件。"], questions:["课程题库", "维护学生自主练习使用的单选题和编程题；作业题目单独创建。"]};
+    root.querySelector("#course-panel-title").textContent = labels[key][0];
+    root.querySelector("#course-panel-description").textContent = labels[key][1];
+  }
+  root.querySelectorAll("[data-workspace-tab]").forEach(tab => { if (sectionKeys.includes(tab.dataset.workspaceTab)) tab.onclick = event => { event.preventDefault(); showSection(tab.dataset.workspaceTab); }; });
+  showSection(section);
+  root.querySelector("#open-question-create").onclick = () => { const panel = root.querySelector("#manual-question-create"); panel.open = true; panel.scrollIntoView({behavior:"smooth", block:"start"}); };
+  const filterBank = () => { const chapter = root.querySelector("#course-bank-chapter").value; const term = root.querySelector("#course-bank-search").value.trim().toLowerCase(); root.querySelectorAll("[data-bank-chapter]").forEach(row => { row.hidden = (chapter !== "all" && row.dataset.bankChapter !== chapter) || !row.textContent.toLowerCase().includes(term); }); };
+  root.querySelector("#course-bank-chapter").onchange = filterBank;
+  root.querySelector("#course-bank-search").oninput = filterBank;
   root.querySelector("#refresh").onclick = () => editCoursePage().catch(error => tell(error.message));
   root.querySelector("#duplicate-course").onclick = async () => {
     try {
@@ -352,7 +376,7 @@ async function editCoursePage() {
   });
   bindForm("#audience-form", async (data, form) => {
     const major_ids = new FormData(form).getAll("major_ids");
-    if (!major_ids.length) throw new Error("请至少选择一个面向的学生专业");
+    if (!major_ids.length) throw new Error("请选择本教学班的学生专业");
     await post(`/api/courses/${id}/audience`, {major_ids});
     tell("课程授课范围已更新，学生刷新后按新范围访问；历史作答保留");
   });
@@ -361,7 +385,7 @@ async function editCoursePage() {
     await editCoursePage(); tell("资源已加入课程");
   });
   bindForm("#question-form", async data => {
-    await post(`/api/courses/${id}/questions`, {...data, options:data.options.split("|").map(o => o.trim()), answer:Number(data.answer), knowledge_point:data.knowledge_point || ""});
+    await post(`/api/courses/${id}/questions`, {...data, options:[0,1,2,3].map(i => data[`option-${i}`].trim()), answer:Number(data.answer), knowledge_point:data.knowledge_point || ""});
     await editCoursePage(); tell("练习题已加入课程");
   });
   bindForm("#chapter-form", async data => {
@@ -435,7 +459,7 @@ async function editCoursePage() {
       const data = Object.fromEntries(new FormData(form));
       try {
         await patch(`/api/courses/${id}/questions/${encodeURIComponent(form.dataset.question)}`,
-          {...data, options:data.options.split("|").map(option => option.trim()), answer:Number(data.answer), knowledge_point:data.knowledge_point || ""});
+          {...data, options:[...form.querySelectorAll('[name^="option-"]')].map(input => input.value.trim()), answer:Number(data.answer), knowledge_point:data.knowledge_point || ""});
         await editCoursePage(); tell("题目已保存");
       } catch (error) { tell(error.message); }
     };
@@ -472,19 +496,13 @@ async function editCoursePage() {
 
 async function recordsPage() {
   if (user.role === "teacher") return teacherAnalyticsPage();
-  const [logs, courses] = await Promise.all([api("/api/learning-records"), api("/api/courses")]);
-  const summaries = courses.map(c => {
-    const items = logs.filter(r => r.course_id === c.id);
-    return `<div class="record-row"><div><b>${esc(c.title)}</b><small>${items.length ? `已完成 ${items.length} 次练习 · 最近 ${date(items[0].submitted_at)}` : "待完成练习"}</small></div><strong class="score">${items.length ? `${Math.max(...items.map(r => r.score))} 分` : "—"}<small>最高分</small></strong></div>`;
-  }).join("");
-  layout(`<div class="section-title"><div><span class="eyebrow">LEARNING PROGRESS</span><h1>我的学习进度</h1><p class="muted">按课程查看练习完成情况，回顾每一次反馈。</p></div><button class="ghost" id="refresh">刷新记录</button></div><section><h2>课程进度</h2><div class="record-list">${summaries || '<div class="empty">暂无课程。</div>'}</div></section><section><h2>练习提交记录</h2>${recordList(logs, false)}</section>`, "学习进度");
-  root.querySelector("#refresh").onclick = () => recordsPage().catch(e => tell(e.message));
+  return learningFilePage(context(), "records");
 }
 
 async function teacherAnalyticsPage() { return analyticsPage(context()); }
 async function profilePage() {
   if (user.role !== "student") throw new Error("请使用学生账号查看本人画像");
-  return personalProfilePage(context());
+  return learningFilePage(context(), "overview");
 }
 async function reviewPage() {
   if (user.role !== "student") throw new Error("请使用学生账号打开错题与复习");
@@ -501,7 +519,7 @@ async function accountPage() {
 
 async function render() {
   [config, majors] = await Promise.all([api("/api/config"), api("/api/majors")]);
-  if (["course_audiences", "teacher_content", "assignments", "gradebook", "announcements", "live_quiz"]
+  if (["course_audiences", "teacher_content", "assignments", "gradebook", "announcements", "teacher_workspace", "teaching_classes", "professional_classes", "assignment_practice_progress", "live_quiz", "independent_assignments", "review_calendar_export"]
       .some(key => !config.features?.[key])) {
     throw new Error("后台仍在运行旧版本。请在原终端按 Ctrl+C 停止服务，重新运行 run.py，再打开新终端显示的地址。");
   }
@@ -521,7 +539,7 @@ async function render() {
     initializeApiKey(config, user).catch(error => tell(error.message));
     return;
   }
-  const views = {analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), "live-quiz":() => liveQuizPage(context()), dashboard, course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage, assignments:() => assignmentsPage(context()), assignment:() => assignmentDetailPage(context()), gradebook:() => gradebookPage(context()), "student-detail":() => studentDetailPage(context()), announcements:() => announcementsPage(context())};
+  const views = {"live-quiz":() => liveQuizPage(context()), analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), dashboard, teaching:() => teachingCoursesPage(context()), "learning-center":() => learningFilePage(context()), course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage, assignments:() => assignmentsPage(context()), "assignment-builder":() => assignmentBuilderPage(context()), "teaching-ai":() => teachingAiPage(context()), assignment:() => assignmentDetailPage(context()), gradebook:() => gradebookPage(context()), "student-detail":() => studentDetailPage(context()), announcements:() => announcementsPage(context())};
   if (!views[page]) throw new Error("页面不存在");
   await views[page]();
 }
@@ -531,5 +549,5 @@ root.addEventListener("click", event => { if (event.target.id === "retry") locat
 window.addEventListener("focus", () => {
   if (!user) return;
   if (page === "dashboard") dashboard().catch(e => tell(e.message));
-  if (page === "records") recordsPage().catch(e => tell(e.message));
+  if (page === "records" && user.role === "teacher") recordsPage().catch(e => tell(e.message));
 });

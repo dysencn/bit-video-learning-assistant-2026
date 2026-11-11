@@ -1,4 +1,5 @@
 import {esc, icon} from "/static/ui.js";
+import {courseLabel} from "/static/teaching-courses.js";
 
 const CELLS = 12;
 const letter = index => String.fromCharCode(65 + index);
@@ -97,16 +98,16 @@ function startTicker(quiz) {
 
 async function teacherPage(ctx) {
   const {api, post, layout, root, tell} = ctx;
-  const courses = await api("/api/courses");
+  const courses = (await api("/api/courses")).filter(course => course.status === "published");
   if (!courses.length) {
     layout('<div class="form-card"><h2>还没有课程</h2><p class="muted">请先创建并发布一门课程，再来发起课堂抢答。</p></div>', "课堂抢答");
     return;
   }
-  layout(`<div class="page-heading"><div><span class="eyebrow">LIVE CLASSROOM</span><h1>课堂抢答</h1><p class="muted">学生端通过 SSE 实时收到题目，作答后看板即时更新。抢答只做课堂互动，不计入课程成绩。</p></div></div>
+  layout(`<div class="page-heading"><div><span class="eyebrow">LIVE CLASSROOM</span><h1>课堂抢答</h1><p class="muted">选择教学班发起抢答，学生作答后看板实时更新。抢答只做课堂互动，不计入课程成绩。</p></div></div>
     <section class="form-card live-setup" id="live-setup">
       <h2>发起一场抢答</h2>
       <div class="live-fields">
-        <label>课程<select id="live-course">${courses.map(course => `<option value="${esc(course.id)}">${esc(course.title)}</option>`).join("")}</select></label>
+        <label>课程 / 教学班<select id="live-course">${courses.map(course => `<option value="${esc(course.id)}" ${ctx.params.get("course") === course.id ? "selected" : ""}>${esc(courseLabel(course))}</option>`).join("")}</select></label>
         <label>题目<select id="live-question"><option value="">手填题目</option></select></label>
         <label>时长（秒）<input id="live-duration" type="number" min="10" max="300" value="30"></label>
       </div>
@@ -135,7 +136,7 @@ async function teacherPage(ctx) {
     questionSelect.innerHTML = '<option value="">手填题目</option>';
     try {
       const course = await api(`/api/courses/${encodeURIComponent(courseSelect.value)}`);
-      const questions = course.questions || [];
+      const questions = (course.questions || []).filter(question => question.status !== "retired");
       questionSelect.innerHTML = '<option value="">手填题目</option>' + questions.map(question =>
         `<option value="${esc(question.id)}">${esc(question.text.slice(0, 42))}</option>`).join("");
     } catch (error) { tell(error.message); }

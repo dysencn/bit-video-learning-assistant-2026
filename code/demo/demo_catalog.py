@@ -16,14 +16,22 @@ def question(qid, chapter, point, text, options, answer, explanation):
 
 
 def demo_programming_questions():
-    """Stable sample IDs, public examples and judge data; no reference solutions."""
+    """Stable sample IDs, examples, judge data and public practice reference solutions."""
+    references = {
+        "sum": ("a, b = map(int, input().split())\nprint(a + b)", "把输入转换为两个整数，再输出它们的和。"),
+        "length": ("print(len(input()))", "input() 去掉行末换行，保留字符串中的其他空格；len() 统计字符数。"),
+        "parity": ('n = int(input())\nprint("even" if n % 2 == 0 else "odd")', "对 2 取余，余数为零就是偶数，负数与零也适用。"),
+        "accumulate": ("n = int(input())\nprint(n * (n + 1) // 2)", "利用等差数列求和公式，整数除法保证结果为整数。"),
+        "maximum": ("n = int(input())\nvalues = list(map(int, input().split()))\nprint(max(values))", "将第二行转换为整数列表，使用 max() 求最大值，可正确处理全负数。"),
+        "frequency": ("n = int(input())\nwords = input().split()\ntarget = input()\nprint(words.count(target))", "count() 统计目标字符串的出现次数，字符串比较区分大小写。"),
+    }
     def build(key, chapter, title, description, examples, hidden):
         pairs = lambda rows: [{"input": source, "output": expected} for source, expected in rows]
         return {"id": f"py-demo-{key}", "type": "python", "demo": True,
                 "chapter_id": chapter, "title": title, "text": title,
                 "description": description + "\n\n请从标准输入读取数据，只输出答案，不要输出‘请输入’等提示文字。",
                 "examples": pairs(examples), "test_cases": pairs(examples + hidden),
-                "limits": dict(PYTHON_LIMITS)}
+                "limits": dict(PYTHON_LIMITS), "reference_code":references[key][0], "explanation":references[key][1]}
 
     return [
         build("sum", "ch-1", "两个整数之和",
@@ -52,6 +60,20 @@ def demo_programming_questions():
               [("5\npython java python cpp python\npython\n", "3\n"), ("3\nPython python PYTHON\npython\n", "1\n")],
               [("3\na b c\nz\n", "0\n"), ("1\nhello\nhello\n", "1\n"), ("4\nhi hi hi hi\nhi\n", "4\n")]),
     ]
+
+
+def upgrade_practice_solutions(data):
+    if data.get("practice_solutions_version") == 1:
+        return False
+    samples = demo_programming_questions()
+    for course in data["courses"]:
+        for question in course.get("programming_questions", []):
+            sample = next((q for q in samples if question.get("demo") and question["id"].endswith(q["id"])), None)
+            if sample and all(question.get(field) == sample.get(field) for field in ("title", "description", "examples")):
+                for field in ("reference_code", "explanation"):
+                    question.setdefault(field, sample[field])
+    data["practice_solutions_version"] = 1
+    return True
 
 
 def demo_courses():
@@ -165,7 +187,7 @@ def upgrade_catalog(data):
                         item.setdefault("explanation", source["explanation"])
         for field in ("category", "demo", "duration", "level"):
             course.setdefault(field, sample[field])
-        if course["id"] == "course-demo":
+        if course["id"] == "course-demo" and data.get("demo_teaching_classes_version", 0) < 2:
             course["major_ids"] = list(sample["major_ids"])
             course.pop("major_id", None)
     data["demo_catalog_version"] = 2
@@ -193,7 +215,7 @@ def upgrade_programming_samples(data):
 
 def seed_activity(data, accounts):
     """Persist clearly tagged sample activity only for untouched built-in demo students."""
-    if data.get("demo_activity_version", 0) >= 1:
+    if data.get("demo_activity_version", 0) >= 2 and data.get("demo_assignment_version", 0) >= 1:
         return False
     courses = {course["id"]: course for course in data["courses"]}
     now = datetime.now(timezone.utc)
@@ -207,8 +229,8 @@ def seed_activity(data, accounts):
         number = next((n for n in plans if student["id"] == f"student-demo-{n}"), None)
         if number is None:
             continue
-        chosen = [courses[cid] for cid in ("course-demo", "course-deep-learning")
-                  if cid in courses and student.get("major_id") in courses[cid]["major_ids"]]
+        chosen = [course for course in courses.values() if course.get("demo") and course.get("status") == "published"
+                  and student.get("major_id") in course["major_ids"]]
         for course in chosen:
             points = {point["id"]: point["name"] for point in course["knowledge_points"]}
             for ci, correct_count in enumerate(plans[number]):
@@ -250,5 +272,9 @@ def seed_activity(data, accounts):
                     "details": details, "demo": True,
                 })
     data["submissions"].sort(key=lambda record: record["submitted_at"], reverse=True)
-    data["demo_activity_version"] = 1
+    from .demo_assignments import prepare_demo_assignments
+    prepare_demo_assignments(data, accounts)
+    from .assignment_questions import upgrade_independent_assignments
+    upgrade_independent_assignments(data)
+    data["demo_activity_version"] = 2
     return True

@@ -450,7 +450,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
     async def config():
         return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.6.0", "local_only": True,
                 "features": {"course_audiences": True, "student_profiles": True, "python_programming": True,
-                             "ai_quiz": True, "ai_analysis": True, "python_ai_advice": True, "teacher_content": True,
+                             "ai_quiz": True, "ai_quiz_actions": True, "ai_analysis": True, "python_ai_advice": True, "teacher_content": True,
                              "assignments": True, "gradebook": True, "announcements": True,
                              "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
                              "assignment_practice_progress": True, "live_quiz": True, "independent_assignments": True, "review_calendar_export": True}}
@@ -2239,7 +2239,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         store = request.app.state.learning
         names = {course["id"]: course["title"] + (" · " + course["teaching_class"] if course.get("teaching_class") else "") for course in store.data["courses"]}
         assignments = {item["id"]: item for item in store.data.get("assignments", [])}
-        return [{**record, "course_name": names.get(record["course_id"], "历史课程")}
+        return [{**record, "course_name": record.get("course_name") or names.get(record["course_id"], "历史课程")}
                 for record in store.data.setdefault("wrong_questions", [])
                 if record["student_id"] == user["id"] and record_answers_visible(record, assignments, store.data["submissions"])]
 
@@ -2345,6 +2345,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                     record["mastered_at"] = now
             else:
                 record["wrong_count"] += 1
+                if not record.get("first_wrong_at"):
+                    record["first_wrong_at"] = now
                 record["last_wrong_at"] = now
                 record["review_interval_days"] = 1
                 record["next_review_at"] = _days_later(1)
@@ -2501,6 +2503,57 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             raise HTTPException(error.status_code, str(error)) from None
         return FileResponse(path, media_type="text/html" if kind == "html" else "text/plain",
                             filename=Path(job["filename"]).stem + "-课程录音文字稿." + kind)
+
+    @app.get("/api/jobs/{job_id}/quiz/wrong-questions")
+    async def ai_quiz_wrong_membership(request: Request, job_id: str):
+        user = require_role(request, "student")
+        find_job(request, job_id, owner_only=True)
+        try:
+            quiz = request.app.state.quizzes.read(job_id)
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+        with request.app.state.learning.lock:
+            ids = [r["ai_source"]["question_id"] for r in request.app.state.learning.data["wrong_questions"]
+                   if r["student_id"] == user["id"] and r.get("ai_source", {}).get("job_id") == job_id
+                   and r["ai_source"].get("quiz_id") == quiz["id"]]
+        return {"quiz_id":quiz["id"], "question_ids":ids}
+
+    @app.post("/api/jobs/{job_id}/quiz/wrong-questions")
+    async def add_ai_quiz_wrong_question(request: Request, job_id: str):
+        payload = await json_object(request)
+        user = require_role(request, "student")
+        find_job(request, job_id, owner_only=True)
+        store = request.app.state.learning
+        with request.app.state.quizzes.lock, store.lock:
+            try:
+                quiz = request.app.state.quizzes.read(job_id)
+            except SummaryError as error:
+                raise HTTPException(error.status_code, str(error)) from None
+            if payload.get("quiz_id") != quiz["id"]:
+                raise HTTPException(409, "AI 题目版本已更新，请刷新练习后再加入错题本。")
+            question = next((q for q in quiz["questions"] if q["id"] == payload.get("question_id")), None)
+            if question is None:
+                raise HTTPException(400, "请选择这份 AI 练习中的有效题目。")
+            source = {"job_id":job_id, "quiz_id":quiz["id"], "question_id":question["id"]}
+            records = store.data["wrong_questions"]
+            previous = next((r for r in records if r["student_id"] == user["id"] and r.get("ai_source") == source), None)
+            if previous:
+                return {"added":False, "record":deepcopy(previous)}
+            now = LearningStore.now()
+            record = {"id":uuid.uuid4().hex[:12], "student_id":user["id"], "course_id":f"ai-video:{job_id}",
+                      "course_name":"AI 自测 · " + quiz["title"], "source":"ai_quiz_manual", "ai_source":source,
+                      "question_id":f"ai-{quiz['id']}-{question['id']}", "knowledge_point_id":None,
+                      "knowledge_point_name":"AI 课程自测", "chapter_id":"ai-practice", "chapter_title":"AI 生成练习",
+                      "question_snapshot":{k:deepcopy(question[k]) for k in ("text","options","answer","explanation")},
+                      "added_at":now, "wrong_count":0, "first_wrong_at":None, "last_wrong_at":None,
+                      "status":"unresolved", "review_interval_days":1, "next_review_at":now, "review_count":0}
+            records.append(record)
+            try:
+                store.save()
+            except OSError:
+                records.remove(record)
+                raise HTTPException(507, "题目未加入错题本，无法保存数据，请检查磁盘后重试。") from None
+            return {"added":True, "record":deepcopy(record)}
 
     @app.post("/api/jobs/{job_id}/quiz/submissions", status_code=201)
     async def submit_ai_quiz(request: Request, job_id: str):

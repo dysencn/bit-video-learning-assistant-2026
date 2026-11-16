@@ -1,5 +1,6 @@
 import {esc} from "/static/ui.js";
 import {analysisLink} from "/static/analysis.js";
+import {questionAction, mountQuestionActions} from "/static/ai-quiz-actions.js";
 
 export const quizActive = new Set(["preparing", "generating", "validating", "saving"]);
 const modeNames = {combined:"PPT + 演讲文字", slides:"仅 PPT", transcript:"仅演讲文字"};
@@ -136,8 +137,11 @@ export async function quizPage(ctx, jobId, runId, waiting) {
   function renderQuiz(quiz, job) {
     const questions = quiz.questions;
     root.querySelector("h1").textContent = quiz.title;
-    content.innerHTML = `<p class="muted">${esc(job.filename)} · ${esc(modeNames[quiz.source_mode])} · 10 道单选题，每题 10 分</p><p class="muted">题目由 DeepSeek 根据课程材料生成，请结合原课核对题意与解析。</p><form id="ai-quiz-form" class="quiz"><div class="questions">${questions.map((q,i) => `<fieldset class="question"><legend>${i+1}. ${esc(q.text)}</legend>${q.options.map((option,oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65+oi)}. ${esc(option)}</label>`).join("")}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交并查看得分</button><button class="secondary" type="button" id="ai-quiz-reset">重新作答</button></div><div id="ai-quiz-result" class="quiz-result" role="status"></div></form>`;
+    content.innerHTML = `<p class="muted">${esc(job.filename)} · ${esc(modeNames[quiz.source_mode])} · 10 道单选题，每题 10 分</p><p class="muted">题目由 DeepSeek 根据课程材料生成，请结合原课核对题意与解析。</p><section id="ai-quiz-actions" class="study-note" aria-label="AI 题目操作"></section><form id="ai-quiz-form" class="quiz"><div class="questions">${questions.map((q,i) => `<fieldset class="question"><legend>${i+1}. ${esc(q.text)}</legend>${q.options.map((option,oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65+oi)}. ${esc(option)}</label>`).join("")}${questionAction(q, user.role)}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交并查看得分</button><button class="secondary" type="button" id="ai-quiz-reset">重新作答</button></div><div id="ai-quiz-result" class="quiz-result" role="status"></div></form>`;
     const form = root.querySelector("#ai-quiz-form"), result = root.querySelector("#ai-quiz-result");
+    mountQuestionActions({ctx, quiz, jobId, request:read}).catch(error => {
+      root.querySelector("#ai-quiz-actions").textContent = `题目操作暂不可用：${error.message}，请刷新后重试。`;
+    });
     const draftKey = `ai-quiz:${user.id}:${jobId}:${quiz.id}`;
     try {
       const saved = JSON.parse(sessionStorage.getItem(draftKey) || "{}");

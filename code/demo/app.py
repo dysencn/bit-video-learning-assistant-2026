@@ -87,6 +87,62 @@ def _days_later(days: int) -> str:
     return (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
 
 
+# —— 三信号 SM-2 复习调度（features.review_scheduler = "sm2"）——
+# 回忆质量 q 不依赖学生自评、答题耗时或额外按钮，只用三个客观信号推导：
+#   1) 本次对错；2) 该题历史答错次数；3) 实际间隔是否显著超过计划间隔（逾期才复习还答对）。
+SM2_QUALITY_DELTA = {5: 0.10, 4: 0.0, 3: -0.14, 2: -0.32}
+SM2_EASE_MIN, SM2_EASE_MAX = 1.3, 3.0
+SM2_MAX_INTERVAL = 180                      # 间隔上限，避免极端膨胀
+SM2_MASTERED_INTERVAL = 60                  # 达到该间隔视为掌握（SM-2 需要放开 14 天封顶）
+
+FEATURES = {
+    "course_audiences": True, "student_profiles": True, "python_programming": True,
+    "ai_quiz": True, "ai_quiz_actions": True, "ai_analysis": True, "python_ai_advice": True,
+    "teacher_content": True, "assignments": True, "gradebook": True, "announcements": True,
+    "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
+    "assignment_practice_progress": True, "live_quiz": True, "independent_assignments": True,
+    "review_calendar_export": True, "review_scheduler": "sm2",
+}
+
+
+def sm2_quality(record: dict, correct: bool, now: datetime) -> int:
+    """三信号回忆质量：答错=2；反复错且首次复习就答对=3；逾期(≥1.5 倍计划间隔)答对=5；其余=4。
+
+    反复答错过的题即使逾期答对也压到 4，避免"刚看完解析的瞬时记忆/蒙对"被当成熟练。
+    """
+    if not correct:
+        return 2
+    wrong = int(record.get("wrong_count") or 0)
+    reviewed = int(record.get("review_count") or 0)
+    if wrong >= 2 and reviewed == 0:
+        return 3
+    planned = int(record.get("review_interval_days") or 1)
+    started = record.get("last_reviewed_at") or record.get("first_wrong_at") or record.get("added_at")
+    actual = planned
+    try:
+        actual = (now - datetime.fromisoformat(started)).total_seconds() / 86400
+    except (TypeError, ValueError):
+        pass
+    if actual >= planned * 1.5:
+        return 4 if wrong >= 2 else 5
+    return 4
+
+
+def sm2_interval(record: dict, ease: float) -> int:
+    """下一次复习间隔：从重置态(≤1 天)首次答对给 2 天、第二次给 6 天，之后按记忆倍率增长，封顶 180 天。"""
+    previous = int(record.get("review_interval_days") or 1)
+    if previous <= 1:
+        return 2
+    if previous == 2:
+        return 6
+    return min(int(previous * ease + 0.5), SM2_MAX_INTERVAL)
+
+
+def review_scheduler() -> str:
+    """读取复习调度算法开关；默认三信号 SM-2，显式配置为 linear 时回退旧版 2 倍封顶逻辑。"""
+    return "linear" if FEATURES.get("review_scheduler") == "linear" else "sm2"
+
+
 def _parse_datetime(value, label="时间"):
     """Parse browser datetime-local/ISO values into an aware UTC datetime."""
     if value in (None, ""):
@@ -449,11 +505,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
     @app.get("/api/config")
     async def config():
         return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.6.0", "local_only": True,
-                "features": {"course_audiences": True, "student_profiles": True, "python_programming": True,
-                             "ai_quiz": True, "ai_quiz_actions": True, "ai_analysis": True, "python_ai_advice": True, "teacher_content": True,
-                             "assignments": True, "gradebook": True, "announcements": True,
-                             "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
-                             "assignment_practice_progress": True, "live_quiz": True, "independent_assignments": True, "review_calendar_export": True}}
+                "features": FEATURES}
 
     async def json_object(request):
         try:
@@ -1386,6 +1438,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                         # 做题又答错：说明仍未掌握，复习调度重置为 1 天后。
                         record["review_interval_days"] = 1
                         record["next_review_at"] = _days_later(1)
+                        record["correct_streak"] = 0
                     else:
                         record = {"id": uuid.uuid4().hex[:12], "student_id": user["id"], "course_id": course_id,
                                   "question_id": detail["question_id"], "knowledge_point_id": kp_id,
@@ -1400,7 +1453,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                                   "first_wrong_at": submission["submitted_at"],
                                   "status": "unresolved",
                                   "review_interval_days": 1, "next_review_at": _days_later(1),
-                                  "review_count": 0}
+                                  "review_count": 0, "ease_factor": 2.5, "correct_streak": 0}
                         existing[detail["question_id"]] = record
                         wrong_book.append(record)
             if attempt:
@@ -2314,7 +2367,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
 
     @app.post("/api/wrong-questions/{question_id}/review")
     async def review_question(request: Request, question_id: str):
-        """复习作答：答对则间隔翻倍（封顶 14 天，连续间隔满 14 天自动视为掌握）；答错则重置为 1 天。"""
+        """复习作答：默认走三信号 SM-2（记忆倍率驱动间隔，间隔达 60 天视为掌握）；答错重置为 1 天。
+
+        配置 features.review_scheduler = "linear" 时回退旧版"答对间隔翻倍、封顶 14 天"逻辑。
+        """
         user = require_role(request, "student")
         payload = await json_object(request)
         selected = payload.get("selected")
@@ -2333,14 +2389,27 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 raise HTTPException(400, "请选择有效选项")
             correct = selected == answer
             now = LearningStore.now()
+            scheduler = review_scheduler()
+            if scheduler == "sm2":
+                # 先用更新前的记录判定回忆质量：逾期比较依赖旧的 last_reviewed_at。
+                quality = sm2_quality(record, correct, datetime.fromisoformat(now))
+                ease = float(record.get("ease_factor", 2.5)) + SM2_QUALITY_DELTA[quality]
+                record["ease_factor"] = round(min(SM2_EASE_MAX, max(SM2_EASE_MIN, ease)), 2)
+                record["last_quality"] = quality
+                record["correct_streak"] = (record.get("correct_streak", 0) + 1) if correct else 0
             record["last_reviewed_at"] = now
             record["review_count"] = record.get("review_count", 0) + 1
             record["last_review_result"] = correct
             if correct:
-                interval = min(record.get("review_interval_days", 1) * 2, 14)
+                if scheduler == "sm2":
+                    interval = sm2_interval(record, record["ease_factor"])
+                    mastered_threshold = SM2_MASTERED_INTERVAL
+                else:
+                    interval = min(record.get("review_interval_days", 1) * 2, 14)
+                    mastered_threshold = 14
                 record["review_interval_days"] = interval
                 record["next_review_at"] = _days_later(interval)
-                if interval >= 14:
+                if interval >= mastered_threshold:
                     record["status"] = "mastered"
                     record["mastered_at"] = now
             else:
@@ -2546,7 +2615,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                       "knowledge_point_name":"AI 课程自测", "chapter_id":"ai-practice", "chapter_title":"AI 生成练习",
                       "question_snapshot":{k:deepcopy(question[k]) for k in ("text","options","answer","explanation")},
                       "added_at":now, "wrong_count":0, "first_wrong_at":None, "last_wrong_at":None,
-                      "status":"unresolved", "review_interval_days":1, "next_review_at":now, "review_count":0}
+                      "status":"unresolved", "review_interval_days":1, "next_review_at":now, "review_count":0,
+                      "ease_factor":2.5, "correct_streak":0}
             records.append(record)
             try:
                 store.save()

@@ -26,7 +26,7 @@ from pptx import Presentation
 from demo.jobs import JobManager
 from demo.media import ffmpeg_path, run_ffmpeg
 from demo.accounts import AccountStore, DEMO_TEACHER, DEMO_STUDENT
-from demo.app import LearningStore
+from demo.app import LearningStore, sm2_interval, sm2_quality
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -421,21 +421,27 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(record["review_count"], 0)
         self.assertEqual(record["knowledge_point_name"], "算术")
         self.assertGreater(record["next_review_at"], LearningStore.now())
-        # 复习答对：间隔翻倍为 2 天，复习次数 +1
+        # 复习答对：与既有行为衔接，间隔仍为 2 天、复习次数 +1；准时答对回忆质量为 4，倍率不变
         result = self.json_request(f"/api/wrong-questions/{record['id']}/review", {"selected": 1}, account=DEMO_STUDENT)
         self.assertTrue(result["correct"])
         self.assertEqual(result["review_interval_days"], 2)
         self.assertEqual(result["review_count"], 1)
-        # 复习答错：间隔重置为 1 天，wrong_count 累加
+        self.assertEqual(result["last_quality"], 4)
+        self.assertEqual(result["ease_factor"], 2.5)
+        # 复习答错：间隔重置为 1 天，wrong_count 累加，记忆倍率下调 0.32
         result = self.json_request(f"/api/wrong-questions/{record['id']}/review", {"selected": 2}, account=DEMO_STUDENT)
         self.assertFalse(result["correct"])
         self.assertEqual(result["review_interval_days"], 1)
         self.assertEqual(result["wrong_count"], 2)
-        # 连续答对至间隔 14 天自动视为掌握，移出复习队列
+        self.assertEqual(result["last_quality"], 2)
+        self.assertEqual(result["ease_factor"], 2.18)
+        # 连续答对，间隔按记忆倍率增长；SM-2 模式下达到 60 天视为掌握并移出复习队列
         record = [r for r in self.json_request("/api/review/due", account=DEMO_STUDENT) if r["course_id"] == cid][0]
-        for _ in range(4):
+        for _ in range(8):
             record = self.json_request(f"/api/wrong-questions/{record['id']}/review", {"selected": 1}, account=DEMO_STUDENT)
-        self.assertEqual(record["review_interval_days"], 14)
+            if record["status"] == "mastered":
+                break
+        self.assertGreaterEqual(record["review_interval_days"], 60)
         self.assertEqual(record["status"], "mastered")
         self.assertFalse(any(r["course_id"] == cid for r in self.json_request("/api/review/due", account=DEMO_STUDENT)))
         # 无效选项校验与教师权限
@@ -629,6 +635,34 @@ class DemoIntegrationTest(unittest.TestCase):
         with self.assertRaises(HTTPError) as caught:
             self.request("/api/wrong-questions/export.csv", **{"X-Account-ID": DEMO_TEACHER})
         self.assertEqual(caught.exception.code, 403)
+
+    def test_19_three_signal_sm2_scheduler(self):
+        """三信号 SM-2：回忆质量只由 对错 / 历史错误次数 / 是否逾期 推导，不需要耗时或按钮。"""
+        from datetime import datetime, timedelta, timezone
+        from demo.app import SM2_MASTERED_INTERVAL
+        now = datetime.now(timezone.utc)
+        base = {"wrong_count": 1, "review_count": 0, "review_interval_days": 1,
+                "last_reviewed_at": (now - timedelta(days=1)).isoformat()}
+        # 答错恒为 2，不看其他信号
+        self.assertEqual(sm2_quality(base, False, now), 2)
+        # 准时答对：4
+        self.assertEqual(sm2_quality(base, True, now), 4)
+        # 反复答错过的题，首次复习就答对：压到 3
+        self.assertEqual(sm2_quality({**base, "wrong_count": 3, "review_count": 0}, True, now), 3)
+        # 拖到逾期 3 倍计划间隔才复习、仍答对：5（记忆比预期牢）
+        overdue = {**base, "last_reviewed_at": (now - timedelta(days=3)).isoformat()}
+        self.assertEqual(sm2_quality(overdue, True, now), 5)
+        # 反复错过的题即使逾期答对也只给 4，避免把"刚看解析/蒙对"当熟练
+        self.assertEqual(sm2_quality({**overdue, "wrong_count": 2, "review_count": 2}, True, now), 4)
+        # 间隔：重置态首次答对 2 天、第二次 6 天，之后按记忆倍率增长并封顶 180 天
+        self.assertEqual(sm2_interval({"review_interval_days": 1}, 2.5), 2)
+        self.assertEqual(sm2_interval({"review_interval_days": 2}, 2.5), 6)
+        self.assertEqual(sm2_interval({"review_interval_days": 6}, 2.5), 15)
+        self.assertEqual(sm2_interval({"review_interval_days": 6}, 3.0), 18)
+        self.assertEqual(sm2_interval({"review_interval_days": 150}, 3.0), 180)
+        self.assertEqual(SM2_MASTERED_INTERVAL, 60)
+        # 开关已在配置中声明，前端功能校验才不会报"后台仍在运行旧版本"
+        self.assertEqual(self.json_request("/api/config")["features"]["review_scheduler"], "sm2")
 
 
 if __name__ == "__main__":

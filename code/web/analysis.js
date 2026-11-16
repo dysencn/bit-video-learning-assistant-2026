@@ -5,17 +5,35 @@ export function analysisLink(link, recordId, courseId, source) {
   return link("analysis", "AI 分析", "secondary analysis-link", {record:recordId, start:"1", ...(courseId ? {course:courseId} : {}), ...(source ? {source} : {})});
 }
 
-export async function analysisPage(ctx, recordId, autoStart) {
+export async function programmingAdvicePage(ctx, runId, autoStart) {
+  if (!ctx.config.features?.python_ai_advice) throw new Error("本地服务尚未加载代码 AI 辅助，请重新启动服务后刷新页面。");
+  if (!runId) throw new Error("缺少运行记录，请从编程题运行结果打开分析。");
+  const endpoint = `/api/programming-runs/${encodeURIComponent(runId)}/advice`;
+  const state = await ctx.api(endpoint), record = state.record;
+  const title = state.kind === "debug" ? "AI Debug" : "智能复杂度分析";
+  return analysisPage(ctx, runId, autoStart, {
+    endpoint, title,
+    description:state.kind === "debug" ? "根据本次运行的题目、代码快照和反馈分析错误原因，给出修复步骤及建议测试。" : "根据本次通过的代码分析时间与空间复杂度，说明推导、适用假设和优化建议。",
+    note:"分析使用本次实际运行的代码快照；修改代码后请先重新运行。建议代码不会自动执行或替换编辑器。",
+    metadata:value => `${value.title} · ${value.mode} · 通过 ${value.passed}/${value.total} 个用例`,
+    backLink:ctx.link("programming", "返回编程题", "secondary", {course:record.course_id, question:record.question_id})
+  });
+}
+
+export async function analysisPage(ctx, recordId, autoStart, options={}) {
   const {api, layout, root, user, config, link} = ctx;
   if (!recordId) throw new Error("缺少提交记录，请从答题结果或学习记录打开 AI 分析。");
   if (!config.features?.ai_analysis) throw new Error("本地服务尚未加载 AI 分析，请重新启动服务后刷新页面。");
-  const backLink = user.role === "teacher" && ctx.params.get("course")
+  const title = options.title || "AI 学习分析";
+  const description = options.description || "根据本次全部题目、学生作答和判分结果生成错题解析、掌握情况与复习建议。";
+  const backLink = options.backLink || (user.role === "teacher" && ctx.params.get("course")
     ? link("teaching-ai", "返回课程 AI 分析", "secondary", {course:ctx.params.get("course")})
-    : user.role === "teacher" ? link("records", "返回学情总览", "secondary") : link("learning-center", "返回学习档案", "secondary", {tab:ctx.params.get("source") === "assignment" ? "assignments" : "practice"});
-  layout(`<div class="learning-panel"><span class="eyebrow">DEEPSEEK · LEARNING FEEDBACK</span><h1>AI 学习分析</h1><p id="analysis-record" class="muted"></p><p class="muted">根据本次全部题目、学生作答和判分结果生成错题解析、掌握情况与复习建议。</p><div id="analysis-status" role="status" aria-live="polite"><p id="analysis-message">正在读取分析状态…</p><progress id="analysis-progress" max="100" aria-label="AI 学习分析进度"></progress><small id="analysis-detail"></small></div><div class="actions"><button class="primary" id="analysis-start">生成 AI 分析</button><a class="secondary" id="analysis-view" href="#" target="_blank" rel="noopener" hidden>查看分析报告 ↗</a><a class="secondary" id="analysis-download" href="#" download hidden>下载 HTML ↓</a></div><button type="button" class="key-settings" id="analysis-key">设置 / 更换 DeepSeek 密钥</button><div class="actions">${backLink}</div></div>`, "AI 学习分析");
+    : user.role === "teacher" ? link("records", "返回学情总览", "secondary") : link("learning-center", "返回学习档案", "secondary", {tab:ctx.params.get("source") === "assignment" ? "assignments" : "practice"}));
+  layout(`<div class="learning-panel"><span class="eyebrow">DEEPSEEK · LEARNING FEEDBACK</span><h1>${title}</h1><p id="analysis-record" class="muted"></p><p class="muted">${description}</p><p id="analysis-note" class="muted"></p><div id="analysis-status" role="status" aria-live="polite"><p id="analysis-message">正在读取分析状态…</p><progress id="analysis-progress" max="100" aria-label="AI 分析进度"></progress><small id="analysis-detail"></small></div><div class="actions"><button class="primary" id="analysis-start">生成 AI 分析</button><a class="secondary" id="analysis-view" href="#" target="_blank" rel="noopener" hidden>查看分析报告 ↗</a><a class="secondary" id="analysis-download" href="#" download hidden>下载 HTML ↓</a></div><button type="button" class="key-settings" id="analysis-key">设置 / 更换 DeepSeek 密钥</button><div class="actions">${backLink}</div></div>`, title);
+  root.querySelector("#analysis-note").textContent = options.note || "";
   await initializeApiKey(config, user, {prompt:false});
   const $ = id => root.querySelector(`#${id}`);
-  const endpoint = `/api/learning-records/${encodeURIComponent(recordId)}/analysis`;
+  const endpoint = options.endpoint || `/api/learning-records/${encodeURIComponent(recordId)}/analysis`;
   const fileUrl = action => `${endpoint}/${action}?account=${encodeURIComponent(user.id)}`;
   let timer, stopped = false, submitting = false, running = false, openOnComplete = false, lastAlert = "";
   window.addEventListener("pagehide", () => { stopped = true; clearTimeout(timer); }, {once:true});
@@ -39,7 +57,7 @@ export async function analysisPage(ctx, recordId, autoStart) {
     running = active.has(state.status);
     $("analysis-start").disabled = running || submitting;
     $("analysis-start").hidden = state.status === "completed" && state.available;
-    $("analysis-start").textContent = running ? "正在分析…" : state.status === "idle" ? "生成 AI 分析" : "重试分析";
+    $("analysis-start").textContent = running ? "正在分析…" : state.status === "idle" ? (options.title ? `生成${title}` : "生成 AI 分析") : "重试分析";
     $("analysis-message").textContent = state.message || "点击生成，向 DeepSeek 发送本次题目与作答信息。";
     if (state.progress === null) $("analysis-progress").removeAttribute("value"); else $("analysis-progress").value = state.progress || 0;
     const seconds = Math.max(0, Math.floor((Date.now()-Date.parse(state.started_at))/1000));
@@ -85,7 +103,7 @@ export async function analysisPage(ctx, recordId, autoStart) {
   $("analysis-start").onclick = start;
   $("analysis-key").onclick = () => openApiKeyDialog();
   const state = await request();
-  $("analysis-record").textContent = `${state.record.title} · ${state.record.student} · ${state.record.score} 分 · ${state.record.total} 题`;
+  $("analysis-record").textContent = options.metadata ? options.metadata(state.record) : `${state.record.title} · ${state.record.student} · ${state.record.score} 分 · ${state.record.total} 题`;
   if (autoStart && state.available && state.status === "completed") { location.replace(fileUrl("view")); return; }
   if (autoStart && state.status === "idle") await start();
   else { openOnComplete = active.has(state.status); update(state); }

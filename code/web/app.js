@@ -1,6 +1,6 @@
 import {teacherProgramming, bindTeacherProgramming, programmingPage, programmingRecord} from "/static/programming.js";
 import {quizPage} from "/static/ai-quiz.js";
-import {analysisLink, analysisPage} from "/static/analysis.js";
+import {analysisLink, analysisPage, programmingAdvicePage} from "/static/analysis.js";
 import { esc, icon, number, radarCard, assignmentSubmissionText } from "/static/ui.js";
 import { analyticsPage, reviewCenter } from "/static/learning-pages.js";
 import { assignmentsPage, assignmentDetailPage, gradebookPage, studentDetailPage,
@@ -539,7 +539,7 @@ async function render() {
     initializeApiKey(config, user).catch(error => tell(error.message));
     return;
   }
-  const views = {"live-quiz":() => liveQuizPage(context()), analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), dashboard, teaching:() => teachingCoursesPage(context()), "learning-center":() => learningFilePage(context()), course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage, assignments:() => assignmentsPage(context()), "assignment-builder":() => assignmentBuilderPage(context()), "teaching-ai":() => teachingAiPage(context()), assignment:() => assignmentDetailPage(context()), gradebook:() => gradebookPage(context()), "student-detail":() => studentDetailPage(context()), announcements:() => announcementsPage(context())};
+  const views = {"programming-advice":() => programmingAdvicePage(context(), params.get("run"), params.get("start") === "1"), "live-quiz":() => liveQuizPage(context()), analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), dashboard, teaching:() => teachingCoursesPage(context()), "learning-center":() => learningFilePage(context()), course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage, assignments:() => assignmentsPage(context()), "assignment-builder":() => assignmentBuilderPage(context()), "teaching-ai":() => teachingAiPage(context()), assignment:() => assignmentDetailPage(context()), gradebook:() => gradebookPage(context()), "student-detail":() => studentDetailPage(context()), announcements:() => announcementsPage(context())};
   if (!views[page]) throw new Error("页面不存在");
   await views[page]();
 }

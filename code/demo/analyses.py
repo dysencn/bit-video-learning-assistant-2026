@@ -117,13 +117,16 @@ class AnalysisManager:
             return state
 
     def start(self, user, record, course, *, api_key=None):
+        return self.start_report(user, record["id"], lambda:submission_evidence(record, course), api_key=api_key)
+
+    def start_report(self, user, record_id, evidence, *, api_key=None, prompt=PROMPT, label="学习分析"):
         with self.lock:
-            state = self.get(user["id"], record["id"])
+            state = self.get(user["id"], record_id)
             if state["status"] in ACTIVE or (state["status"] == "completed" and state["available"]):
                 return state
             if self.active:
                 raise AnalysisError("已有学习分析正在生成，请等待完成后再试。", 409)
-            evidence = submission_evidence(record, course)
+            evidence = evidence() if callable(evidence) else evidence
             material = json.dumps(evidence, ensure_ascii=False)
             if len(material.encode("utf-8")) > 1024**2:
                 raise AnalysisError("本次提交的题目与作答超过 1 MiB，未发送部分材料，请按章节提交后分析。", 400)
@@ -132,23 +135,24 @@ class AnalysisManager:
             self.active = report_id
             try:
                 state = self._update(report_id, status="preparing", progress=5, owner_id=user["id"],
-                                     record_id=record["id"], started_at=datetime.now(timezone.utc).isoformat(),
-                                     message="正在整理全部题目、学生答案和判分结果…", model=ai.MODEL)
-                self.executor.submit(self._work, report_id, material, key)
+                                     record_id=record_id, started_at=datetime.now(timezone.utc).isoformat(),
+                                     message="正在整理全部题目、学生答案和判分结果…" if label == "学习分析" else "正在整理题意、本次运行代码与判题反馈…", model=ai.MODEL)
+                self.executor.submit(self._work, report_id, material, key, prompt, label)
             except (OSError, RuntimeError):
                 self.active = None
                 self._update(report_id, status="failed", progress=0, message="无法保存分析任务，请检查磁盘和服务后重试。")
                 raise AnalysisError("无法保存分析任务，请检查磁盘和服务后重试。", 507) from None
             return state
 
-    def _work(self, report_id, material, key):
+    def _work(self, report_id, material, key, prompt=PROMPT, label="学习分析"):
         folder = self.root / report_id
         temporary = folder / "report.html.tmp"
         began = time.monotonic()
         try:
-            payload = json.dumps({"model":ai.MODEL, "messages":[{"role":"user", "content":PROMPT + "\n以下为本次提交数据（索引从0开始）：\n" + material}],
+            payload = json.dumps({"model":ai.MODEL, "messages":[{"role":"user", "content":prompt + "\n以下为本次提交数据（索引从0开始）：\n" + material}],
                                   "max_tokens":14000, "stream":False, "thinking":{"type":"disabled"}}, ensure_ascii=False).encode("utf-8")
-            self._update(report_id, status="generating", progress=None, message="正在等待 DeepSeek 分析错题与学习情况…")
+            self._update(report_id, status="generating", progress=None,
+                         message="正在等待 DeepSeek 分析错题与学习情况…" if label == "学习分析" else f"正在等待 DeepSeek 生成{label}报告…")
             response = ai.call_deepseek(payload, key)
             self._update(report_id, status="validating", progress=90, message="AI 分析已返回，正在检查 HTML 文档…")
             try:

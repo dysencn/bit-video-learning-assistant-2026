@@ -39,6 +39,7 @@ from . import summaries as summary_service
 from .transcriptions import TranscriptionManager, TranscriptionError
 from . import transcriptions as transcription_service
 from .programming import ProgrammingManager, validate_question, LIMITS as PYTHON_LIMITS
+from .programming_ai import LABELS as CODE_AI_LABELS, PROMPTS as CODE_AI_PROMPTS
 from .live_quizzes import LiveQuizManager, LiveQuizError
 from .quizzes import QuizManager, ACTIVE as QUIZ_ACTIVE
 from .analyses import AnalysisManager
@@ -403,6 +404,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         app.state.accounts = AccountStore(jobs_root.parent / "accounts.json")
         app.state.learning = LearningStore(jobs_root.parent / "learning-platform.json")
         app.state.analyses = AnalysisManager(jobs_root.parent / "analyses")
+        app.state.code_analyses = AnalysisManager(jobs_root.parent / "programming-analyses")
         app.state.programming = ProgrammingManager(app.state.learning)
         app.state.live = LiveQuizManager(app.state.learning)
         history_enabled = seed_demo_history if seed_demo_history is not None else os.environ.get("VIDEO_DEMO_SEED_HISTORY", "1") != "0"
@@ -412,6 +414,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 app.state.learning.save()
         yield
         app.state.programming.close()
+        app.state.code_analyses.close()
         app.state.analyses.close()
         app.state.quizzes.close()
         app.state.summaries.close()
@@ -447,7 +450,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
     async def config():
         return {"token": TOKEN, "max_bytes": MAX_BYTES, "version": "0.6.0", "local_only": True,
                 "features": {"course_audiences": True, "student_profiles": True, "python_programming": True,
-                             "ai_quiz": True, "ai_analysis": True, "teacher_content": True,
+                             "ai_quiz": True, "ai_analysis": True, "python_ai_advice": True, "teacher_content": True,
                              "assignments": True, "gradebook": True, "announcements": True,
                              "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
                              "assignment_practice_progress": True, "live_quiz": True, "independent_assignments": True, "review_calendar_export": True}}
@@ -1183,6 +1186,60 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         if result is None:
             raise HTTPException(404, "运行记录不存在或服务已重启，请查看已保存的学习记录")
         return result
+
+    def code_advice_source(request, run_id):
+        user = require_role(request, "student")
+        source = request.app.state.programming.advice(run_id, user["id"])
+        if source is None:
+            raise HTTPException(404, "运行记录不存在或服务已重启，请返回编程题重新运行。")
+        if source["kind"] is None:
+            raise HTTPException(409, "请先完成运行示例或提交判题；执行环境或保存异常时请先重试运行。")
+        return user, source
+
+    @app.post("/api/programming-runs/{run_id}/advice", status_code=202)
+    async def start_code_advice(request: Request, run_id: str):
+        # Consume the small request before denial so Windows clients receive the HTTP error cleanly.
+        body = await request.body()
+        user, source = code_advice_source(request, run_id)
+        if body and await json_object(request):
+            raise HTTPException(400, "分析使用本次实际运行的代码与判题结果，无需上传代码或选择分析方式。")
+        kind = source["kind"]
+        try:
+            return request.app.state.code_analyses.start_report(user, run_id, source["evidence"],
+                api_key=request.app.state.accounts.api_key(request), prompt=CODE_AI_PROMPTS[kind], label=CODE_AI_LABELS[kind])
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+
+    @app.get("/api/programming-runs/{run_id}/advice")
+    async def code_advice_state(request: Request, run_id: str):
+        user, source = code_advice_source(request, run_id)
+        return {**request.app.state.code_analyses.get(user["id"], run_id), "kind":source["kind"],
+                "record":{"title":source["evidence"]["题目"]["title"], "mode":source["evidence"]["运行方式"],
+                          "passed":source["run"]["passed"], "total":source["run"]["total"],
+                          "course_id":source["run"]["course_id"], "question_id":source["run"]["question_id"]}}
+
+    @app.get("/api/programming-runs/{run_id}/advice/{action}")
+    async def code_advice_document(request: Request, run_id: str, action: str):
+        user, source = code_advice_source(request, run_id)
+        if action not in {"view", "download"}:
+            raise HTTPException(404, "文件不存在")
+        try:
+            html = request.app.state.code_analyses.html(user["id"], run_id)
+        except SummaryError as error:
+            raise HTTPException(error.status_code, str(error)) from None
+        label = CODE_AI_LABELS[source["kind"]]
+        if action == "download":
+            filename = quote(source["evidence"]["题目"]["title"] + "-" + label + ".html", safe="")
+            return HTMLResponse(html, headers={"Content-Disposition":f"attachment; filename=python-advice.html; filename*=UTF-8''{filename}",
+                                               "Content-Security-Policy":SUMMARY_CSP})
+        account, encoded_run = quote(user["id"], safe=""), quote(run_id, safe="")
+        course, question = quote(source["run"]["course_id"], safe=""), quote(source["run"]["question_id"], safe="")
+        toolbar = (f'<nav style="padding:16px;background:#edf5ef;font:15px sans-serif;display:flex;gap:24px;flex-wrap:wrap">'
+                   f'<a href="/api/programming-runs/{encoded_run}/advice/download?account={account}" download>下载分析 HTML</a>'
+                   f'<a href="/?page=programming&amp;course={course}&amp;question={question}&amp;account={account}" target="_blank" rel="noopener">返回编程题 ↗</a></nav>')
+        html = re.sub(r"(<body\b[^>]*>)", lambda match:match.group(0)+toolbar, html, count=1, flags=re.I)
+        policy = SUMMARY_CSP.replace("sandbox allow-same-origin;", "sandbox allow-same-origin allow-downloads allow-popups allow-popups-to-escape-sandbox;")
+        return HTMLResponse(html, headers={"Content-Security-Policy":policy})
 
     @app.post("/api/courses/{course_id}/submissions")
     async def submit_answers(request: Request, course_id: str):

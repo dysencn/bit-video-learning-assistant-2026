@@ -1,5 +1,6 @@
 """Bounded local Python judging. This is not a hostile-code security sandbox."""
 from concurrent.futures import ThreadPoolExecutor
+from copy import deepcopy
 from datetime import datetime, timezone
 import os
 from pathlib import Path
@@ -15,6 +16,19 @@ LIMITS = {"seconds": 3, "memory_mb": 256, "output_bytes": 65536, "code_bytes": 3
 LABELS = {"accepted": "通过", "wrong_answer": "输出不正确", "time_limit": "运行超时，已停止",
           "memory_limit": "内存超限，已停止", "output_limit": "输出超过 64 KB，已停止",
           "runtime_error": "运行错误", "system_error": "执行环境异常，请重试"}
+
+
+def advice_kind(run):
+    if run.get("status") != "completed" or run.get("error") or not run.get("results"):
+        return None
+    statuses = {r["status"] for r in run["results"]}
+    if "system_error" in statuses:
+        return None
+    if statuses == {"accepted"} and run["completed"] == run["total"]:
+        return "complexity"
+    if statuses & {"wrong_answer", "time_limit", "runtime_error", "memory_limit", "output_limit"}:
+        return "debug"
+    return None
 
 
 def normalize(value):
@@ -217,9 +231,13 @@ class ProgrammingManager:
             for key in list(self.runs):
                 if len(self.runs) < 100: break
                 if self.runs[key]["status"] == "completed": del self.runs[key]
+            # Freeze the executed problem, even if a teacher edits it while judging.
+            question = deepcopy(question)
             cases = question["examples"] if mode == "sample" else question["test_cases"]
             run = {"id": uuid.uuid4().hex, "owner_id": user["id"], "status": "running", "mode": mode,
-                   "completed": 0, "total": len(cases), "results": [], "question_id": question["id"]}
+                   "completed": 0, "total": len(cases), "results": [], "question_id": question["id"],
+                   "course_id": course["id"], "_code": code,
+                   "_question": {k:deepcopy(question[k]) for k in ("title", "description", "examples")}}
             self.runs[run["id"]] = run
             self.active.add(user["id"])
             self.pool.submit(self.work, run, user, course, question, code, cases)
@@ -229,7 +247,21 @@ class ProgrammingManager:
         with self.lock:
             item = self.runs.get(run_id)
             if not item or item["owner_id"] != owner: return None
-            return {**item, "results": [dict(result) for result in item["results"]]}
+            return {**{k:v for k,v in item.items() if not k.startswith("_")},
+                    "results": [dict(result) for result in item["results"]], "advice_kind":advice_kind(item)}
+
+    def advice(self, run_id, owner):
+        """Only the stored executed code and public problem/feedback may leave the server."""
+        with self.lock:
+            run = self.runs.get(run_id)
+            if not run or run["owner_id"] != owner:
+                return None
+            kind = advice_kind(run)
+            evidence = {"题目":deepcopy(run["_question"]), "学生代码":run["_code"],
+                        "运行方式":"公开示例" if run["mode"] == "sample" else "正式判题",
+                        "总用例数":run["total"], "已执行用例数":run["completed"], "通过用例数":run.get("passed"),
+                        "运行限制":dict(LIMITS), "判题反馈":deepcopy(run["results"])}
+            return {"kind":kind, "evidence":evidence, "run":self.get(run_id, owner)}
 
     def work(self, run, user, course, question, code, cases):
         try:

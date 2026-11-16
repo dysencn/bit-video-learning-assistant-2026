@@ -61,7 +61,7 @@ export async function initializeApiKey(localConfig, account, {prompt = true} = {
   dialog.id = "api-key-dialog";
   dialog.setAttribute("aria-labelledby", "api-key-title");
   dialog.innerHTML = `<form><h2 id="api-key-title">设置 DeepSeek API 密钥</h2>
-    <p>未配置密钥时，可以设置环境变量 <b>DEEPSEEK_API_KEY</b>，也可以在这里输入，用于生成总结、AI 出题和学习分析。</p>
+    <p>未配置密钥时，可以设置环境变量 <b>DEEPSEEK_API_KEY</b>，也可以在这里输入，用于生成总结、AI 出题、学习分析、AI Debug 和代码复杂度分析。</p>
     <p>输入的密钥仅用于当前账号的本次登录，刷新后可继续使用；退出登录或重启服务后清除。不写入文件或浏览器存储。</p>
     <label for="api-key-input">API 密钥</label><input id="api-key-input" type="password" autocomplete="off" spellcheck="false" maxlength="512" placeholder="粘贴你的 DeepSeek API Key" required>
     <p class="key-error" role="alert" hidden></p>

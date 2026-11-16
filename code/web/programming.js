@@ -95,7 +95,7 @@ function resultsHtml(run) {
 }
 
 export async function programmingPage(ctx, courseId, questionId) {
-  const {api, post, root, layout, user, link} = ctx;
+  const {api, post, root, layout, user, link, config} = ctx;
   if (user.role !== "student") throw new Error("请使用学生账号打开编程练习");
   const [course, logs] = await Promise.all([api(`/api/courses/${encodeURIComponent(courseId)}`), api("/api/learning-records")]);
   const question = (course.programming_questions || []).find(q => q.id === questionId);
@@ -142,7 +142,13 @@ export async function programmingPage(ctx, courseId, questionId) {
         stage.textContent = `已完成 ${run.completed}/${run.total} 个用例 · 等待 ${Math.floor((Date.now()-began)/1000)} 秒`;
         result.innerHTML = resultsHtml(run);
         if (run.submission_id) result.insertAdjacentHTML("beforeend", `<div class="actions">${analysisLink(link, run.submission_id)}</div>`);
-        if (run.status === "completed") { try { sessionStorage.removeItem(key+":run"); } catch {} break; }
+        if (run.status === "completed") {
+          if (run.advice_kind) {
+            const label = run.advice_kind === "debug" ? "AI Debug" : "智能复杂度分析";
+            result.insertAdjacentHTML("beforeend", `<div class="actions">${config.features?.python_ai_advice ? link("programming-advice", label, "secondary python-ai-advice", {run:run.id, start:"1"}) : '<span class="muted">重启本地服务后可使用 AI 代码辅助。</span>'}</div><p class="muted">AI 分析针对本次实际运行的代码快照；修改代码后请先重新运行。${run.mode === "sample" && run.advice_kind === "complexity" ? "示例通过不代表全部判题用例通过。" : ""}</p>`);
+          }
+          break;
+        }
         if (Date.now()-began > 60000) throw new Error("等待时间较长，请刷新页面继续查看结果，不要重复提交。");
         await new Promise(resolve => setTimeout(resolve,350));
       }

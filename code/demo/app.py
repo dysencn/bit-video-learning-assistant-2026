@@ -5,7 +5,7 @@ import asyncio
 from contextlib import asynccontextmanager
 from copy import deepcopy
 import csv
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 import io
 import json
 import math
@@ -141,6 +141,79 @@ def sm2_interval(record: dict, ease: float) -> int:
 def review_scheduler() -> str:
     """读取复习调度算法开关；默认三信号 SM-2，显式配置为 linear 时回退旧版 2 倍封顶逻辑。"""
     return "linear" if FEATURES.get("review_scheduler") == "linear" else "sm2"
+
+
+# —— 学习计划与打卡 ——
+# 目标按本地自然周（周一至周日）统计；打卡只认真实事件（正式提交、错题复习），
+# 打开页面、看视频、点错题本都不记打卡，保证"连续天数"能对外解释。
+STUDY_PLAN_DEFAULT = {"weekly_submissions": 3, "weekly_reviews": 10}
+STUDY_PLAN_LIMIT = 50
+STUDY_CALENDAR_DAYS = 30
+STUDY_ACHIEVEMENTS = [
+    ("first_submission", "第一次练习", "完成第一次正式练习提交"),
+    ("first_review", "第一次复习", "在错题本里完成第一次复习"),
+    ("perfect_score", "满分一次", "任意一次练习提交拿到 100 分"),
+    ("streak_3", "连续三天", "连续 3 天都有学习活动"),
+    ("streak_7", "连续七天", "连续 7 天都有学习活动"),
+    ("review_20", "复习二十题", "累计完成 20 次错题复习"),
+    ("clear_wrong", "错题清零", "曾经有错题，且当前全部已掌握"),
+    ("week_goal", "周目标达成", "本周练习与复习目标同时完成"),
+]
+WEEKDAY_LABELS = "日一二三四五六"
+
+
+def local_day(value=None) -> date:
+    """UTC 时间（ISO 字符串 / datetime / 空）转本地日期，让打卡按“本地日”归档。"""
+    moment = value if isinstance(value, datetime) else None
+    if moment is None and value:
+        try:
+            moment = datetime.fromisoformat(str(value))
+        except (TypeError, ValueError):
+            moment = None
+    if moment is None:
+        moment = datetime.now(timezone.utc)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone().date()
+
+
+def bump_study_activity(data, student_id, kind, moment=None):
+    """按本地日期累加一次活动；kind 只允许 submissions / reviews。"""
+    entry = (data.setdefault("study_activity", {}).setdefault(student_id, {})
+             .setdefault(local_day(moment).isoformat(), {"submissions": 0, "reviews": 0}))
+    entry[kind] = int(entry.get(kind, 0)) + 1
+
+
+def activity_days(data, student_id) -> dict:
+    """取某学生的“日期 → 活动计数”表；缺失时返回空表，不写回数据。"""
+    return dict((data.get("study_activity") or {}).get(student_id) or {})
+
+
+def study_streak(days: dict, today: date) -> tuple[int, int]:
+    """返回 (当前连续天数, 历史最长连续天数)。
+
+    今天还没学习时从昨天开始回溯——当天没打卡不该立刻清零，第二天仍无活动才算中断。
+    """
+    active = sorted(day for day, entry in days.items() if entry.get("submissions") or entry.get("reviews"))
+    if not active:
+        return 0, 0
+    points = [date.fromisoformat(day) for day in active]
+    longest = run = 1
+    for previous, moment in zip(points, points[1:]):
+        run = run + 1 if (moment - previous).days == 1 else 1
+        longest = max(longest, run)
+    known = set(active)
+    cursor = today if active[-1] == today.isoformat() else today - timedelta(days=1)
+    current = 0
+    while cursor.isoformat() in known:
+        current += 1
+        cursor -= timedelta(days=1)
+    return current, longest
+
+
+def plan_rate(value: int, goal: int) -> int:
+    """目标完成率，封顶 100；目标为 0 时视为未设置。"""
+    return min(100, round(value / goal * 100)) if goal else 0
 
 
 def _parse_datetime(value, label="时间"):
@@ -337,6 +410,9 @@ class LearningStore:
             if key not in self.data or not isinstance(self.data.get(key), list):
                 self.data[key] = []
                 migrated = True
+        if not isinstance(self.data.get("study_plans"), dict):
+            self.data["study_plans"] = {}
+            migrated = True
         for course in self.data["courses"]:
             if "teacher_id" not in course:
                 course["teacher_id"] = DEMO_TEACHER
@@ -393,6 +469,18 @@ class LearningStore:
                 # 旧记录没有调度数据：默认立即进入复习队列。
                 record["next_review_at"] = record.get("last_wrong_at", self.now())
                 migrated = True
+        # 学习打卡：首次按真实事件回填历史活动，之后由提交/复习增量累加。
+        if self.data.get("study_activity_version") != 1:
+            self.data["study_activity"] = {}
+            for record in self.data["submissions"]:
+                if record.get("submitted_at"):
+                    bump_study_activity(self.data, record["student_id"], "submissions", record["submitted_at"])
+            for record in self.data.setdefault("wrong_questions", []):
+                # 旧记录只保留“最近一次复习时间”，更早的复习日无法还原，按一次计入。
+                if record.get("review_count") and record.get("last_reviewed_at"):
+                    bump_study_activity(self.data, record["student_id"], "reviews", record["last_reviewed_at"])
+            self.data["study_activity_version"] = 1
+            migrated = True
         if upgrade_catalog(self.data):
             migrated = True
         if upgrade_programming_samples(self.data):
@@ -1460,6 +1548,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 attempt["status"] = "submitted"
                 attempt["submitted_at"] = submission["submitted_at"]
                 attempt["submission_id"] = submission["id"]
+            bump_study_activity(store.data, user["id"], "submissions", submission["submitted_at"])
             store.save()
         return _student_record_view(submission, {item["id"]: item for item in store.data.get("assignments", [])}, store.data["submissions"])
 
@@ -2287,6 +2376,103 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                        "needs_attention": False, "not_started": True}
             return {"profile": own, "scope": "本人可学习及已参与课程；仅统计正式练习提交，复习不计分"}
 
+    def study_plan_payload(store, student):
+        """学习计划与打卡：本周目标完成度、今日任务、连续天数、30 天打卡与成就。"""
+        today = local_day()
+        data = store.data
+        saved = (data.get("study_plans") or {}).get(student["id"]) or {}
+        goals = {
+            "weekly_submissions": int(saved.get("weekly_submissions") or STUDY_PLAN_DEFAULT["weekly_submissions"]),
+            "weekly_reviews": int(saved.get("weekly_reviews") or STUDY_PLAN_DEFAULT["weekly_reviews"]),
+        }
+        days = activity_days(data, student["id"])
+        week_start = today - timedelta(days=today.weekday())
+        week = [week_start + timedelta(days=offset) for offset in range(7)]
+        week_submissions = sum(int((days.get(day.isoformat()) or {}).get("submissions", 0)) for day in week)
+        week_reviews = sum(int((days.get(day.isoformat()) or {}).get("reviews", 0)) for day in week)
+        today_entry = days.get(today.isoformat()) or {}
+        assignments = {item["id"]: item for item in data.get("assignments", [])}
+        wrong = [record for record in data.setdefault("wrong_questions", [])
+                 if record.get("student_id") == student["id"]
+                 and record_answers_visible(record, assignments, data["submissions"])]
+        unresolved = [record for record in wrong if record.get("status") != "mastered"]
+        now = LearningStore.now()
+        due = [record for record in unresolved if (record.get("next_review_at") or "") <= now]
+        total_submissions = sum(int(entry.get("submissions", 0)) for entry in days.values())
+        total_reviews = sum(int(entry.get("reviews", 0)) for entry in days.values())
+        current_run, longest_run = study_streak(days, today)
+        perfect = any(record.get("score") == 100 for record in data["submissions"]
+                      if record.get("student_id") == student["id"])
+        calendar = []
+        for offset in range(STUDY_CALENDAR_DAYS - 1, -1, -1):
+            day = today - timedelta(days=offset)
+            entry = days.get(day.isoformat()) or {}
+            calendar.append({
+                "date": day.isoformat(), "label": f"{day.month}/{day.day}",
+                "week": WEEKDAY_LABELS[(day.weekday() + 1) % 7],
+                "submissions": int(entry.get("submissions", 0)),
+                "reviews": int(entry.get("reviews", 0)),
+                "active": bool(entry.get("submissions") or entry.get("reviews")),
+                "today": day == today,
+            })
+        unlocked = {
+            "first_submission": total_submissions >= 1,
+            "first_review": total_reviews >= 1,
+            "perfect_score": perfect,
+            "streak_3": longest_run >= 3,
+            "streak_7": longest_run >= 7,
+            "review_20": total_reviews >= 20,
+            "clear_wrong": bool(wrong) and not unresolved,
+            "week_goal": (week_submissions >= goals["weekly_submissions"]
+                          and week_reviews >= goals["weekly_reviews"]),
+        }
+        return {
+            "goals": goals,
+            "updated_at": saved.get("updated_at"),
+            "week": {"start": week_start.isoformat(), "end": week[-1].isoformat(),
+                     "submissions": week_submissions, "reviews": week_reviews,
+                     "submission_rate": plan_rate(week_submissions, goals["weekly_submissions"]),
+                     "review_rate": plan_rate(week_reviews, goals["weekly_reviews"])},
+            "today": {"date": today.isoformat(),
+                      "submissions": int(today_entry.get("submissions", 0)),
+                      "reviews": int(today_entry.get("reviews", 0)),
+                      "due": len(due),
+                      "active": bool(today_entry.get("submissions") or today_entry.get("reviews"))},
+            "streak": {"current": current_run, "longest": longest_run},
+            "calendar": calendar,
+            "achievements": [{"id": key, "title": title, "desc": desc, "unlocked": unlocked[key]}
+                             for key, title, desc in STUDY_ACHIEVEMENTS],
+            "totals": {"submissions": total_submissions, "reviews": total_reviews,
+                       "unresolved": len(unresolved), "mastered": len(wrong) - len(unresolved),
+                       "due": len(due)},
+            "scope": "只统计正式练习提交与错题复习；打开页面、看视频不计入打卡",
+        }
+
+    @app.get("/api/student/plan")
+    async def student_plan(request: Request):
+        student = require_role(request, "student")
+        store = request.app.state.learning
+        with store.lock:
+            return study_plan_payload(store, student)
+
+    @app.post("/api/student/plan")
+    async def update_student_plan(request: Request):
+        """保存每周目标：只接受 1–50 的整数，避免 0 目标让完成率失去意义。"""
+        student = require_role(request, "student")
+        payload = await json_object(request)
+        goals = {}
+        for key, label in (("weekly_submissions", "每周练习次数"), ("weekly_reviews", "每周复习题数")):
+            value = payload.get(key)
+            if type(value) is not int or not 1 <= value <= STUDY_PLAN_LIMIT:
+                raise HTTPException(400, f"{label}需为 1 到 {STUDY_PLAN_LIMIT} 之间的整数")
+            goals[key] = value
+        store = request.app.state.learning
+        with store.lock:
+            store.data.setdefault("study_plans", {})[student["id"]] = {**goals, "updated_at": LearningStore.now()}
+            store.save()
+            return study_plan_payload(store, student)
+
+
     def student_wrong_records(request, user):
         """当前学生的可见错题；作业答案未解锁时，列表与导出均不返回。"""
         store = request.app.state.learning
@@ -2420,9 +2606,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 record["review_interval_days"] = 1
                 record["next_review_at"] = _days_later(1)
                 record["status"] = "unresolved"
+            bump_study_activity(store.data, user["id"], "reviews", now)
             store.save()
             return {**dict(record), "correct": correct, "answer": answer}
-
     @app.get("/api/jobs")
     async def list_jobs(request: Request):
         user = request.app.state.accounts.current(request)

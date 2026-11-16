@@ -277,3 +277,48 @@ body:has(#platform)>header,body:has(#platform)>main{display:none}#platform{min-h
 .calendar-day small.has-load{color:#a34a2f;font-weight:700;opacity:1}
 .calendar-day.is-active small.has-load{color:#ffe9c7}
 @media(max-width:850px){.calendar-strip{grid-template-columns:repeat(7,minmax(0,1fr))}}
+/* 学习计划与打卡 */
+.plan-card{margin:0 0 24px;padding:22px 24px;border:1px solid var(--line);border-radius:18px;background:#fff}
+.plan-card-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;margin-bottom:16px}
+.plan-card-head h2{font-size:22px;margin:4px 0 6px}
+.plan-goals{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}
+.plan-goals.wide{gap:26px;margin:16px 0 18px}
+.plan-goal{display:grid;gap:6px}
+.plan-goal-head{display:flex;justify-content:space-between;align-items:baseline;font-size:13px;color:var(--muted)}
+.plan-goal-head b{color:var(--ink);font-size:14px}
+.plan-progress{height:8px;border-radius:99px;background:#e6ebe5;overflow:hidden}
+.plan-actions{display:flex;flex-wrap:wrap;gap:10px;margin-top:18px}
+.plan-board{padding:24px;border:1px solid var(--line);border-radius:18px;background:#fff;margin:0 0 24px}
+.plan-board-head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px}
+.plan-board-head h2{font-size:24px;margin:4px 0 6px}
+.plan-streak{display:grid;justify-items:end;gap:2px;text-align:right}
+.plan-streak b{font-size:36px;line-height:1.1;color:var(--green)}
+.plan-streak span{font-size:13px;color:var(--ink)}
+.plan-streak small{font-size:11px;color:var(--muted)}
+.plan-form{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px;padding:16px;border:1px dashed #d8e0db;border-radius:14px;background:#fbfcf9;margin-bottom:14px}
+.plan-form label{display:grid;gap:6px;font-size:12px;color:var(--muted)}
+.plan-form input{width:110px;background:#fff;border:1px solid #d8e0db;border-radius:9px;padding:8px 10px;color:var(--ink);font-size:13px}
+.plan-form button{display:inline-flex;align-items:center;gap:6px}
+.plan-note{font-size:12px;margin:0 0 16px}
+.checkin-grid{display:grid;grid-template-columns:repeat(15,minmax(0,1fr));gap:6px;margin:6px 0 10px}
+.checkin-cell{display:grid;place-items:center;gap:2px;padding:7px 2px;border:1px solid var(--line);border-radius:9px;background:#fff;min-height:44px}
+.checkin-cell span{font-size:10px;color:var(--muted)}
+.checkin-cell i{font-style:normal;font-size:11px;font-weight:700;color:var(--green)}
+.checkin-cell.is-active{background:#eef7f1;border-color:#b9d8c6}
+.checkin-cell.is-today{border-color:var(--green);box-shadow:0 0 0 2px rgba(20,105,88,.12)}
+.checkin-cell.is-active.is-today{background:var(--green)}
+.checkin-cell.is-active.is-today i,.checkin-cell.is-active.is-today span{color:#fff}
+.checkin-legend{display:flex;align-items:center;gap:16px;font-size:11px;color:var(--muted)}
+.checkin-legend span{display:inline-flex;align-items:center;gap:6px}
+.checkin-legend i{width:12px;height:12px;border-radius:4px;border:1px solid var(--line);background:#fff;display:inline-block}
+.checkin-legend i.is-active{background:#eef7f1;border-color:#b9d8c6}
+.achievement-board{padding:24px;border:1px solid var(--line);border-radius:18px;background:#fff;margin:0 0 24px}
+.achievement-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px}
+.achievement{display:flex;align-items:center;gap:12px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:#fbfcf9;opacity:.62}
+.achievement.is-unlocked{opacity:1;background:#eef7f1;border-color:#b9d8c6}
+.achievement-mark{display:grid;place-items:center;width:34px;height:34px;flex:0 0 34px;border-radius:50%;background:#fff;border:1px solid var(--line);color:var(--muted)}
+.achievement.is-unlocked .achievement-mark{color:var(--green);border-color:#b9d8c6}
+.achievement div{display:grid;gap:2px;min-width:0}
+.achievement b{font-size:13px}
+.achievement small{font-size:11px;color:var(--muted);line-height:1.4}
+@media(max-width:850px){.plan-card-head,.plan-board-head{flex-direction:column}.plan-goals,.plan-goals.wide{grid-template-columns:1fr}.checkin-grid{grid-template-columns:repeat(7,minmax(0,1fr))}.plan-streak{justify-items:start;text-align:left}}

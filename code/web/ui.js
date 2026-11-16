@@ -18,6 +18,10 @@ const paths = {
 };
 export const icon = name => `<svg class="ui-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || paths.book}</svg>`;
 export const number = value => value === null || value === undefined ? "—" : value;
+export const progressBar = (rate, label) => {
+  const percent = Math.max(0, Math.min(100, Number(rate) || 0));
+  return `<div class="plan-progress" role="img" aria-label="${esc(label || `已完成 ${percent}%`)}" style="background:linear-gradient(to right,var(--green) ${percent}%,#e6ebe5 ${percent}%)"></div>`;
+};
 export const assignmentSubmissionText = item => item.attempts
   ? `本作业已提交 ${item.attempts} / ${item.max_attempts} 次`
   : `本作业尚未提交 · 最多 ${item.max_attempts} 次`;

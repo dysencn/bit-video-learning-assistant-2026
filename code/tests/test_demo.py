@@ -664,6 +664,68 @@ class DemoIntegrationTest(unittest.TestCase):
         # 开关已在配置中声明，前端功能校验才不会报"后台仍在运行旧版本"
         self.assertEqual(self.json_request("/api/config")["features"]["review_scheduler"], "sm2")
 
+    def test_20_study_plan_and_checkin(self):
+        """学习计划与打卡：目标可保存、打卡只认真实活动、连续天数按本地日回溯。"""
+        from datetime import date, datetime, timedelta
+        from demo.app import study_streak, local_day, plan_rate, bump_study_activity
+        today = date(2026, 11, 16)
+        days = {"2026-11-14": {"submissions": 1, "reviews": 0},
+                "2026-11-15": {"submissions": 0, "reviews": 2},
+                "2026-11-16": {"submissions": 1, "reviews": 0}}
+        # 今天有活动：连续 3 天
+        self.assertEqual(study_streak(days, today), (3, 3))
+        # 今天还没学习：从昨天回溯，不当场清零
+        self.assertEqual(study_streak({k: v for k, v in days.items() if k != "2026-11-16"}, today), (2, 2))
+        # 昨天也没学习：当前连续归零，最长记录保留
+        self.assertEqual(study_streak({"2026-11-13": {"submissions": 1},
+                                       "2026-11-14": {"reviews": 1}}, today), (0, 2))
+        # 只有浏览/无活动不计打卡
+        self.assertEqual(study_streak({"2026-11-16": {"submissions": 0, "reviews": 0}}, today), (0, 0))
+        self.assertEqual(plan_rate(5, 10), 50)
+        self.assertEqual(plan_rate(12, 10), 100)
+        # 打卡按本地日归档，UTC 时间要换算到本地日期
+        stamp = "2026-11-16T16:30:00+00:00"
+        self.assertEqual(local_day(stamp), datetime.fromisoformat(stamp).astimezone().date())
+        self.assertEqual(local_day(), date.today())
+        # 增量累加只按日期聚合，不新增记录
+        data = {}
+        bump_study_activity(data, "s1", "submissions", "2026-11-16T03:00:00+00:00")
+        bump_study_activity(data, "s1", "reviews", "2026-11-16T10:00:00+00:00")
+        self.assertEqual(data["study_activity"]["s1"]["2026-11-16"], {"submissions": 1, "reviews": 1})
+        # 接口：默认目标、30 天日历、保存目标、非法目标拒绝
+        plan = self.json_request("/api/student/plan", account=DEMO_STUDENT)
+        self.assertEqual(plan["goals"], {"weekly_submissions": 3, "weekly_reviews": 10})
+        self.assertEqual(len(plan["calendar"]), 30)
+        self.assertEqual(plan["calendar"][-1]["today"], True)
+        self.assertEqual(len(plan["achievements"]), 8)
+        self.assertIn("current", plan["streak"])
+        self.assertIn("longest", plan["streak"])
+        updated = self.json_request("/api/student/plan",
+                                    {"weekly_submissions": 4, "weekly_reviews": 12}, account=DEMO_STUDENT)
+        self.assertEqual(updated["goals"], {"weekly_submissions": 4, "weekly_reviews": 12})
+        for bad in ({"weekly_submissions": 0, "weekly_reviews": 12},
+                    {"weekly_submissions": 51, "weekly_reviews": 12},
+                    {"weekly_submissions": "4", "weekly_reviews": 12}):
+            with self.assertRaises(HTTPError) as caught:
+                self.json_request("/api/student/plan", bad, account=DEMO_STUDENT)
+            self.assertEqual(caught.exception.code, 400)
+        # 复习一次即产生今日打卡，且不写正式成绩
+        due = self.json_request("/api/review/due", account=DEMO_STUDENT)
+        if due:
+            before = self.json_request("/api/student/plan", account=DEMO_STUDENT)["today"]["reviews"]
+            records_before = len(self.json_request("/api/learning-records", account=DEMO_STUDENT))
+            self.json_request(f"/api/wrong-questions/{due[0]['id']}/review", {"selected": 0},
+                              account=DEMO_STUDENT)
+            after = self.json_request("/api/student/plan", account=DEMO_STUDENT)
+            self.assertEqual(after["today"]["reviews"], before + 1)
+            self.assertEqual(len(self.json_request("/api/learning-records", account=DEMO_STUDENT)),
+                             records_before, "复习只记打卡，不应新增正式提交")
+        # 教师端没有学习计划接口
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/student/plan", account=DEMO_TEACHER)
+        self.assertEqual(caught.exception.code, 403)
+
+
 
 if __name__ == "__main__":
     unittest.main()

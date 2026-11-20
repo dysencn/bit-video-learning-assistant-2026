@@ -12,6 +12,7 @@ from urllib.error import HTTPError
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 import uvicorn
+from enrollment_fixtures import enroll_matching_students
 from demo.app import create_app, LearningStore
 from demo.programming import run_case, normalize, validate_question
 from demo.demo_catalog import demo_programming_questions
@@ -149,6 +150,7 @@ class ProgrammingHTTPTests(unittest.TestCase):
     def make_question(self):
         course=self.request("/api/courses",{"title":"Python 编程验收","major_ids":["m-soft"]})
         cid=course["id"]
+        enroll_matching_students(self, cid)
         self.request(f"/api/courses/{cid}/resources",{"name":"输入输出说明"})
         question=self.request(f"/api/courses/{cid}/programming-questions",{
             "title":"整数求和", "description":"输入两个整数，输出和。", "chapter_id":course["chapters"][0]["id"],

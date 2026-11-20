@@ -15,6 +15,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 import uvicorn
 
 from demo.accounts import AccountStore
+from enrollment_fixtures import enroll_matching_students
 from demo.app import create_app, LearningStore
 from demo.demo_catalog import seed_activity
 
@@ -66,6 +67,7 @@ class AudienceProfileHTTPTests(unittest.TestCase):
     def make_course(self, audience, teacher="teacher-demo-1"):
         course = self.request("/api/courses", {"title": "跨专业小班测试", "major_ids": audience}, teacher)
         cid = course["id"]
+        enroll_matching_students(self, cid, teacher)
         self.request(f"/api/courses/{cid}/resources", {"name": "测试讲义"}, teacher)
         for n in range(2):
             course = self.request(f"/api/courses/{cid}/questions", {"text": f"测试题 {n}",
@@ -116,6 +118,7 @@ class AudienceProfileHTTPTests(unittest.TestCase):
         self.error(404, f"/api/courses/{cid}/audience", {"major_ids": ["m-cs"]})
         self.error(403, f"/api/courses/{cid}/audience", {"major_ids": ["m-cs"]}, "student-demo-2")
         self.request(f"/api/courses/{cid}/audience", {"major_ids": ["m-cs"]}, "teacher-demo-2")
+        enroll_matching_students(self, cid, "teacher-demo-2")
         self.request(f"/api/courses/{cid}", account="student-demo-3")
         self.error(404, f"/api/courses/{cid}/submissions", {"answers": {}}, "student-demo-1")
         records = self.request("/api/learning-records", account="student-demo-1")
@@ -176,7 +179,7 @@ class AudienceProfileHTTPTests(unittest.TestCase):
             self.assertTrue(all(len(c["major_ids"]) == 1 for c in courses))
             self.assertTrue({q["id"] for q in pair[0]["questions"]}.isdisjoint(q["id"] for q in pair[1]["questions"]))
             self.assertTrue({ch["id"] for ch in pair[0]["chapters"]}.isdisjoint(ch["id"] for ch in pair[1]["chapters"]))
-            self.assertEqual(sum(c["status"] == "draft" for c in courses), 0 if teacher == "teacher-demo-1" else 1)
+            self.assertEqual(sum(c["status"] == "draft" for c in courses), 0)
         soft = self.request("/api/courses", account="student-demo-1")
         ai = self.request("/api/courses", account="student-demo-2")
         self.assertEqual({c["id"] for c in soft}, {"course-demo", "course-web-foundations"})
@@ -236,7 +239,8 @@ class AudienceProfileHTTPTests(unittest.TestCase):
         self.error(404, endpoint, account="student-demo-2")
         self.error(403, endpoint, account="teacher-demo-2")
         self.error(403, endpoint + "/start", {}, "teacher-demo-2")
-        self.error(400, "/api/courses/course-deep-learning-02/live-quizzes", {
+        draft = self.request("/api/courses", {"title":"未发布教学班", "major_ids":["m-ai"]}, "teacher-demo-2")
+        self.error(400, f"/api/courses/{draft['id']}/live-quizzes", {
             "question": {"text": "草稿班题目", "options": ["A", "B"], "answer": 0}}, "teacher-demo-2")
         self.request(endpoint + "/start", {})
         result = self.request(endpoint + "/answers", {"selected": soft["questions"][0]["answer"]}, "student-demo-1")

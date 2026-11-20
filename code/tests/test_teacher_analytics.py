@@ -13,6 +13,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 import uvicorn
 
+from enrollment_fixtures import enroll_matching_students
 from demo.app import create_app
 from demo.summaries import SummaryError
 
@@ -66,6 +67,7 @@ class TeacherAnalyticsTests(unittest.TestCase):
     def course(self, teacher, title, publish=True, major_ids=None):
         course = self.request("/api/courses", {"title": title, "major_ids": major_ids or ["m-soft"]}, account=teacher)
         cid = course["id"]
+        enroll_matching_students(self, cid, teacher)
         self.request(f"/api/courses/{cid}/resources", {"name": "Analytics fixture"}, account=teacher)
         for number in range(3):
             course = self.request(f"/api/courses/{cid}/questions",

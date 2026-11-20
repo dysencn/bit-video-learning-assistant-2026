@@ -32,7 +32,8 @@ from .demo_catalog import demo_courses, upgrade_catalog, upgrade_programming_sam
 from .teaching_catalog import upgrade_teaching_samples
 from .demo_assignments import upgrade_assignment_titles
 from .assignment_questions import (answers_visible, record_answers_visible, upgrade_independent_assignments, validate_questions)
-from .learning_metrics import accepts_student, build_profiles, teacher_analytics as aggregate_teacher
+from .learning_metrics import build_profiles, teacher_analytics as aggregate_teacher
+from .enrollments import is_enrolled, matches_major, subject_key, upgrade_enrollments, replace_roster
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 from .summaries import SummaryManager, SummaryError, SUMMARY_CSP
 from . import summaries as summary_service
@@ -101,7 +102,7 @@ FEATURES = {
     "teacher_content": True, "assignments": True, "gradebook": True, "announcements": True,
     "teacher_workspace": True, "teaching_classes": True, "professional_classes": True,
     "assignment_practice_progress": True, "live_quiz": True, "independent_assignments": True,
-    "review_calendar_export": True, "review_scheduler": "sm2",
+    "review_calendar_export": True, "student_enrollments": True, "review_scheduler": "sm2",
 }
 
 
@@ -252,11 +253,9 @@ def _active_programming(course):
     return [question for question in course.get("programming_questions", []) if not _is_retired(question)]
 
 
-def _course_roster(course, students, submissions):
-    """Students in the course audience plus anyone who has already submitted."""
-    participants = {record["student_id"] for record in submissions if record.get("course_id") == course["id"]}
-    return [student for student in students
-            if accepts_student(course, student) or student["id"] in participants]
+def _course_roster(course, students, _submissions, enrollments):
+    """Current class members; historical submissions never imply current membership."""
+    return [student for student in students if is_enrolled(course, student, enrollments)]
 
 
 def _assignment_window(assignment):
@@ -346,8 +345,8 @@ def _late_metrics(assignment, now):
     return True, days, min(100, per_day * days)
 
 
-def _announcement_recipients(course, submissions, students, audience):
-    roster = _course_roster(course, students, submissions)
+def _announcement_recipients(course, submissions, students, audience, enrollments):
+    roster = [student for student in students if is_enrolled(course, student, enrollments)]
     course_records = [record for record in submissions if record.get("course_id") == course["id"]]
     if audience == "all":
         return [student["id"] for student in roster]
@@ -511,6 +510,8 @@ class LearningStore:
 
     def public_course(self, course, include_answers=False, bank_answers=False):
         result = dict(course)
+        result["student_count"] = sum(row.get("course_id") == course["id"] and row.get("status", "active") == "active"
+                                      for row in self.data.get("enrollments", []))
         result["resources"] = [dict(item) for item in course["resources"]]
         # Retired questions remain visible to the owning teacher for history and restore,
         # but are removed from every student-facing payload.
@@ -556,6 +557,13 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             if seed_activity(app.state.learning.data, app.state.accounts.users):
                 upgrade_independent_assignments(app.state.learning.data)
                 app.state.learning.save()
+        store = app.state.learning
+        if store.data.get("enrollments_version") != 1:
+            backup = store.path.with_name(f"{store.path.stem}.before-student-enrollments.json")
+            if store.path.exists() and not backup.exists():
+                shutil.copy2(store.path, backup)
+            if upgrade_enrollments(store.data, app.state.accounts.students()):
+                store.save()
         yield
         app.state.programming.close()
         app.state.code_analyses.close()
@@ -671,6 +679,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         request.app.state.accounts.xfyun_credentials(request, await json_object(request))
         return {"configured": True, "source": "session"}
 
+    def accepts_student(course, student):
+        return is_enrolled(course, student, app.state.learning.data.get("enrollments", []))
+
     def require_role(request: Request, expected: str):
         user = request.app.state.accounts.current(request)
         if user["role"] != expected:
@@ -717,6 +728,53 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         """预览自主练习题库及公开解答，隐藏判题用例和已停用题目。"""
         course = owned_course(request, course_id)
         return request.app.state.learning.public_course(course, include_answers=False, bank_answers=True)
+
+    def enrollment_view(request, course):
+        students = request.app.state.accounts.students()
+        store = request.app.state.learning
+        with store.lock:
+            rows = store.data.get("enrollments", [])
+            members = {r["student_id"]: r for r in rows if r.get("course_id") == course["id"]
+                       and r.get("status", "active") == "active"}
+            related = {c["id"]: c for c in store.data["courses"] if c["id"] != course["id"]
+                       and c.get("status") != "archived" and subject_key(c) == subject_key(course)}
+            candidates = []
+            for student in students:
+                if not matches_major(course, student):
+                    continue
+                other_classes = [{"id": related[r["course_id"]]["id"],
+                                  "name": related[r["course_id"]].get("teaching_class") or related[r["course_id"]]["title"],
+                                  "teacher": related[r["course_id"]].get("teacher", "")}
+                                 for r in rows if r.get("student_id") == student["id"]
+                                 and r.get("status", "active") == "active" and r.get("course_id") in related]
+                candidates.append({**student, "enrolled": student["id"] in members,
+                                   "enrollment_id": members.get(student["id"], {}).get("id"),
+                                   "other_classes": other_classes})
+            return {"course_id": course["id"], "student_count": len(members),
+                    "student_ids": sorted(members), "students": candidates}
+
+    @app.get("/api/courses/{course_id}/enrollments")
+    async def get_enrollments(request: Request, course_id: str):
+        return enrollment_view(request, owned_course(request, course_id))
+
+    @app.put("/api/courses/{course_id}/enrollments")
+    async def update_enrollments(request: Request, course_id: str):
+        course = editable_course(request, course_id)
+        payload = await json_object(request)
+        students = request.app.state.accounts.students()
+        store = request.app.state.learning
+        with store.lock:
+            before = deepcopy(store.data.get("enrollments", []))
+            try:
+                replace_roster(store.data, course, students, payload.get("student_ids"))
+                store.save()
+            except OSError:
+                store.data["enrollments"] = before
+                raise HTTPException(503, "班级名单未保存，请重试") from None
+            except Exception:
+                store.data["enrollments"] = before
+                raise
+        return enrollment_view(request, course)
 
     @app.patch("/api/courses/{course_id}")
     async def update_course(request: Request, course_id: str):
@@ -864,8 +922,13 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         if "major_ids" not in payload:
             raise HTTPException(400, "请提供课程面向的学生专业")
         audience = course_audience(request, payload)
+        students = request.app.state.accounts.students()
+        by_id = {student["id"]: student for student in students}
         with request.app.state.learning.lock:
             course["major_ids"] = audience
+            for row in request.app.state.learning.data.get("enrollments", []):
+                if row.get("course_id") == course_id and not matches_major(course, by_id.get(row["student_id"], {})):
+                    row.update(status="removed", updated_at=LearningStore.now())
             request.app.state.learning.save()
         return request.app.state.learning.public_course(course, include_answers=True)
 
@@ -1618,8 +1681,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
 
     def teacher_assignment_view(assignment, course, submissions, students):
         state = _assignment_state(assignment)
-        records = [record for record in submissions if record.get("assignment_id") == assignment["id"]]
-        roster = _course_roster(course, students, submissions)
+        roster = _course_roster(course, students, submissions, app.state.learning.data.get("enrollments", []))
+        member_ids = {student["id"] for student in roster}
+        records = [record for record in submissions if record.get("assignment_id") == assignment["id"]
+                   and record["student_id"] in member_ids]
         submitted = {record["student_id"] for record in records}
         latest_by_student = {student_id: _pick_submission([record for record in records
                                                            if record["student_id"] == student_id], "latest")
@@ -1753,7 +1818,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         store = request.app.state.learning
         students = request.app.state.accounts.students()
         with store.lock:
-            roster = _course_roster(course, students, store.data["submissions"])
+            roster = _course_roster(course, students, store.data["submissions"], app.state.learning.data.get("enrollments", []))
             rows = []
             for student in roster:
                 records = [record for record in store.data["submissions"]
@@ -1949,14 +2014,14 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         students = request.app.state.accounts.students()
         with store.lock:
             courses = [course for course in store.data["courses"] if course["teacher_id"] == teacher["id"]]
-            return aggregate_teacher(courses, store.data["submissions"], students)
+            return aggregate_teacher(courses, store.data["submissions"], students, app.state.learning.data.get("enrollments", []))
 
     def gradebook_payload(request, course, mode="latest", status_filter="all", start=None, end=None, chapter_filter=None):
         store = request.app.state.learning
         students = request.app.state.accounts.students()
         all_course_submissions = [record for record in store.data["submissions"]
                                   if record.get("course_id") == course["id"] and record.get("type") != "python"]
-        roster = _course_roster(course, students, all_course_submissions)
+        roster = _course_roster(course, students, all_course_submissions, app.state.learning.data.get("enrollments", []))
         start_at = _parse_datetime(start, "开始日期")
         end_at = _parse_datetime(end, "结束日期")
         submissions = []
@@ -2073,7 +2138,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             if selected_course:
                 course = selected_course
                 course_submissions = [record for record in store.data["submissions"] if record.get("course_id") == course["id"]]
-                roster = _course_roster(course, students, course_submissions)
+                roster = _course_roster(course, students, course_submissions, app.state.learning.data.get("enrollments", []))
                 if student_id not in {item["id"] for item in roster} and not any(
                         record["student_id"] == student_id for record in course_submissions):
                     raise HTTPException(404, "该学生不在课程范围内")
@@ -2084,7 +2149,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                     if course["teacher_id"] != teacher["id"]:
                         continue
                     course_submissions = [record for record in store.data["submissions"] if record.get("course_id") == course["id"]]
-                    roster = _course_roster(course, students, course_submissions)
+                    roster = _course_roster(course, students, course_submissions, app.state.learning.data.get("enrollments", []))
                     if student_id in {item["id"] for item in roster} or any(
                             record["student_id"] == student_id for record in course_submissions):
                         courses.append(course)
@@ -2096,7 +2161,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             submissions.sort(key=lambda record: record.get("submitted_at", ""), reverse=True)
             course_submissions = [record for record in store.data["submissions"]
                                   if record.get("course_id") in course_ids]
-            profiles = build_profiles(courses, course_submissions, students)
+            profiles = build_profiles(courses, course_submissions, students, app.state.learning.data.get("enrollments", []))
             profile = next((item for item in profiles if item["student_id"] == student_id), None)
             wrong = [record for record in store.data.get("wrong_questions", [])
                      if record["student_id"] == student_id and record.get("course_id") in course_ids]
@@ -2139,7 +2204,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         store = request.app.state.learning
         students = request.app.state.accounts.students()
         with store.lock:
-            recipients = _announcement_recipients(course, store.data["submissions"], students, audience)
+            recipients = _announcement_recipients(course, store.data["submissions"], students, audience, app.state.learning.data.get("enrollments", []))
             if not recipients:
                 raise HTTPException(400, "当前受众中没有符合条件的学生")
             announcement = {"id": uuid.uuid4().hex[:12], "course_id": course["id"],
@@ -2337,6 +2402,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 while True:
                     if await request.is_disconnected():
                         break
+                    course = request.app.state.learning.course(quiz["course_id"])
+                    if not is_teacher and (not course or course.get("status") != "published" or not accepts_student(course, user)):
+                        yield 'event: access_revoked\ndata: {"detail":"你已不在本教学班名单中"}\n\n'
+                        break
                     body = json.dumps(snapshot(), ensure_ascii=False)
                     if body != last:
                         last, idle = body, 0
@@ -2366,7 +2435,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                        if (course["status"] == "published" and accepts_student(course, student)) or course["id"] in history]
             assignments = {item["id"]: item for item in store.data.get("assignments", [])}
             visible_submissions = [_student_record_view(record, assignments, store.data["submissions"]) for record in store.data["submissions"]]
-            profiles = build_profiles(courses, visible_submissions, students)
+            profiles = build_profiles(courses, visible_submissions, students, app.state.learning.data.get("enrollments", []))
             own = next((profile for profile in profiles if profile["student_id"] == student["id"]), None)
             if own is None:
                 own = {"student_id": student["id"], "student": student["name"], "major_id": student.get("major_id"),

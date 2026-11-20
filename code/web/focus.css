@@ -1,0 +1,159 @@
+/* Clear hierarchy, legible controls and explicit teaching-class membership. */
+#platform { --accent:#146c53; --focus-line:#dce7e1; background:#f3f6f5; font-size:15px; color:#193c31 }
+#platform .shell { max-width:1360px; padding:32px 36px }
+#platform h1,#platform .catalog-heading h1 { font-size:38px; line-height:1.3; letter-spacing:-.8px }
+#platform h2,#platform .section-title h2 { font-size:25px; line-height:1.4 }
+#platform h3 { line-height:1.5 }
+#platform .eyebrow { font-size:11px; letter-spacing:1.6px; color:#658479 }
+#platform .muted { color:#657b71 }
+#platform .primary,#platform .secondary,#platform .ghost,
+#platform .teaching-class-card .actions>a,#platform .add-teaching-class {
+  min-height:46px; padding:11px 18px; font-size:15px; font-weight:650; border-radius:11px;
+}
+#platform .primary { background:var(--accent); box-shadow:0 3px 8px #146c531c }
+#platform .primary:hover { background:#0c503d; box-shadow:0 5px 12px #146c5326 }
+#platform .secondary { color:#146c53; background:#e8f3ed; border-color:#ccdfd4 }
+#platform .ghost { color:#3c6554; border-color:#d4e0d8 }
+#platform .primary .ui-icon,#platform .secondary .ui-icon,#platform .ghost .ui-icon { width:20px; height:20px }
+#platform .small,#platform button.small,#platform .ghost.small { min-height:40px; font-size:14px; padding:8px 12px }
+#platform input:not([type=checkbox]):not([type=radio]),#platform select,#platform textarea {
+  font-family:inherit; font-size:15px; min-height:46px; border-radius:10px; padding:11px 13px; border-color:#cdded4;
+}
+#platform label,#platform .catalog-toolbar>label,#platform .review-filters label { font-size:14px }
+#platform :is(input[type=checkbox],input[type=radio]) { width:21px; height:21px; accent-color:var(--accent); flex:none }
+#platform .option { min-height:50px; padding:12px 14px; font-size:16px; gap:12px }
+#platform .option:has(input:checked) { background:#e9f5ee; border-color:#4f9a79 }
+#platform .question legend { font-size:18px; line-height:1.65; font-weight:650 }
+#platform .question { padding:22px; border-radius:14px }
+#platform .nav { padding:16px 28px; gap:16px }
+#platform .nav-link { font-size:15px; min-height:46px; padding:10px 12px; border-radius:10px }
+#platform .nav-link .ui-icon { width:20px; height:20px }
+#platform .nav-account .identity { font-size:14px }
+#platform .identity small { font-size:12px }
+#platform #logout { font-size:13px; padding:8px 12px; min-height:40px }
+#platform .nav-bell { width:44px; height:44px }
+#platform .demo-banner { display:inline-flex; font-size:12px; background:#fff8e9; padding:5px 10px; border-radius:20px; margin-bottom:18px }
+#platform .hero.dashboard-hero { min-height:180px; padding:28px 34px; background:linear-gradient(110deg,#e4f1e9,#f0f7f2); border-color:#d1e4d8 }
+#platform .dashboard-hero h1 { font-size:34px }
+#platform .dashboard-hero .muted { font-size:15px }
+#platform .hero-art { height:140px; transform:scale(.85) }
+#platform .dashboard-stats,#platform .catalog-stats { border-radius:18px; border-color:var(--focus-line); padding:24px 8px; box-shadow:0 6px 24px #1b433209; margin:24px 0 32px }
+#platform :is(.dashboard-stats,.catalog-stats)>div { padding:4px 14px }
+#platform :is(.dashboard-stats,.catalog-stats)>div>b,#platform .analytics-card>b { font-size:38px; color:var(--accent); line-height:1.15; font-weight:750; font-variant-numeric:tabular-nums }
+#platform :is(.dashboard-stats,.catalog-stats)>div>span,#platform .analytics-card>span { font-size:14px; color:#5f786c; margin-top:9px }
+#platform .analytics-card { padding:25px; border-radius:16px }
+#platform .subject-grid { gap:24px }
+#platform .subject-card { padding:24px; border-radius:18px; border-color:var(--focus-line); box-shadow:0 4px 18px #21473205 }
+#platform .subject-heading { margin-bottom:20px }
+#platform .subject-heading h2 { font-size:24px }
+#platform .subject-class-count { font-size:13px }
+#platform .teaching-class-card { padding:20px; background:#f8fbf9; border-color:#e0ebe3; border-radius:14px }
+#platform .class-heading h3 { font-size:20px }
+#platform .tag,#platform .class-heading .tag { font-size:13px; padding:4px 10px; line-height:1.5 }
+#platform .class-term { font-size:13px; color:#708579; margin:8px 0 16px }
+#platform .class-roster-summary { display:flex; gap:12px; align-items:center; flex-wrap:wrap }
+#platform .class-student-count { display:inline-flex; align-items:center; gap:7px; font-size:14px; color:#305e49 }
+#platform .class-student-count b { font-size:25px; line-height:1.2; font-variant-numeric:tabular-nums }
+#platform .class-majors span { font-size:12px; color:#537460; padding:4px 9px }
+#platform .class-content-meta,#platform .class-assignment-note { font-size:14px; color:#637a6b; margin-top:14px }
+#platform .class-assignment-note { color:#146c53; font-weight:650 }
+#platform .teaching-class-card .actions { gap:9px; margin-top:18px }
+#platform .teaching-class-card .actions>.primary { flex:1 }
+#platform .add-teaching-class { color:var(--accent); margin-top:18px }
+#platform .catalog-toolbar { padding:18px; border-radius:14px; gap:14px; background:#fff; border:1px solid var(--focus-line) }
+#platform .catalog-search input { border:0; background:transparent }
+#platform .catalog-result-heading { margin:16px 0; font-size:14px }
+#platform .course-card { border-radius:18px; border-color:var(--focus-line); box-shadow:0 5px 20px #1b433209 }
+#platform .course-content h3 { font-size:22px }
+#platform .course-content>p { font-size:14px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden }
+#platform .dashboard-class-label { font-size:15px; font-weight:650; color:#275e46 }
+#platform .course-content .meta,#platform .course-progress-label { font-size:13px }
+#platform .course-content .course-link { display:flex; justify-content:center; gap:8px; min-height:46px; padding:11px 16px; margin-top:18px; border-radius:10px; color:#fff; background:var(--accent); font-size:16px; font-weight:650; text-decoration:none }
+#platform .course-content .course-link:hover { background:#0c503d }
+#platform .teaching-tabs { gap:5px; padding:7px; overflow-x:auto; flex-wrap:nowrap; border-radius:14px; margin-bottom:28px }
+#platform .teaching-tabs>a { padding:12px 16px; font-size:15px; min-height:48px; gap:8px; white-space:nowrap; flex:none; border-radius:10px }
+#platform .teaching-context { font-size:16px; gap:12px; margin-top:2px; flex-wrap:wrap }
+#platform .context-class { font-size:14px; padding:5px 10px }
+#platform .learning-file-tabs,#platform .review-tabs { padding:6px; border-radius:13px; gap:5px }
+#platform .learning-file-tabs button,#platform .review-tabs button { min-height:48px; font-size:16px; padding:12px 18px; border-radius:10px }
+#platform .learning-file-tabs button span,#platform .review-tabs button span { font-size:13px }
+#platform .learning-course-card h3 { font-size:20px }
+#platform .learning-course-card .muted,#platform .learning-course-progress { font-size:14px }
+#platform .record-row b { font-size:16px }
+#platform .record-row small { font-size:13px; line-height:1.7; margin-top:6px }
+#platform .score { font-size:30px; color:var(--accent); font-variant-numeric:tabular-nums }
+#platform .assignment-card h3,#platform .study-card h3 { font-size:20px }
+#platform .assignment-card .muted { font-size:14px }
+#platform .assignment-card .actions>.secondary { color:#fff; background:var(--accent); border-color:var(--accent) }
+#platform .assignment-card-head small { font-size:13px }
+#platform .study-note summary,#platform .study-note>div { font-size:14px }
+#platform .plan-streak b { font-size:38px }
+#platform .plan-goal-head b { font-size:20px }
+#platform .plan-board-head p { font-size:14px }
+#platform .plan-goal small { font-size:13px }
+#platform .calendar-day { min-height:78px; padding:10px 6px; border-radius:12px }
+#platform .calendar-day b { font-size:19px }
+#platform .calendar-week,#platform .calendar-day small { font-size:12px }
+#platform .platform-footer { padding-top:26px; margin-top:34px; font-size:12px }
+#platform .roster-stats { grid-template-columns:repeat(3,minmax(0,1fr)) }
+#platform .roster-stats>div:last-child>b { font-size:25px }
+#platform .roster-panel { border:1px solid var(--focus-line); border-radius:18px; padding:22px; background:#fff; margin-bottom:22px }
+#platform .roster-toolbar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-bottom:18px }
+#platform .roster-toolbar>label { margin:0 }
+#platform .roster-toolbar input,#platform .roster-toolbar select { margin:0 }
+#platform .roster-search { flex:1; min-width:190px }
+#platform .roster-table th { font-size:14px; padding:14px; color:#557363 }
+#platform .roster-table td { font-size:15px; padding:18px 14px }
+#platform .roster-table td:first-child { width:100px; text-align:center }
+#platform .roster-table input[type=checkbox] { display:inline-block; margin:0; cursor:pointer; vertical-align:middle }
+#platform .roster-table input:disabled { cursor:not-allowed }
+#platform .roster-enrolled { background:#f0f8f3 }
+#platform .roster-person { display:flex; align-items:center; gap:12px }
+#platform .roster-table code { font-size:14px; color:#466b58 }
+#platform .roster-table td small { font-size:12px; white-space:normal; margin-top:7px }
+#platform .roster-savebar { position:sticky; bottom:18px; display:flex; justify-content:space-between; align-items:center; gap:18px; padding:18px 24px; border:1px solid #c8ded0; border-radius:16px; box-shadow:0 8px 28px #163f2820; background:#fff; z-index:2 }
+#platform .roster-savebar strong { display:block; font-size:17px }
+#platform .roster-savebar span { display:block; margin-top:4px; font-size:13px; color:#6c8074 }
+#platform .roster-savebar .actions { margin:0 }
+#platform .roster-savebar .primary { min-width:180px }
+#platform .roster-error { color:#a93825; background:#fff2ed; padding:14px; margin-top:14px; border-radius:10px }
+@media(max-width:1200px) {
+  #platform .nav { flex-wrap:wrap }
+  #platform .nav-account { margin-left:auto }
+  #platform .nav-links { order:3; width:100%; flex:auto; justify-content:flex-start; overflow-x:auto; gap:6px; padding-bottom:2px }
+}
+@media(max-width:700px) {
+  #platform .shell { padding:22px 16px }
+  #platform h1,#platform .catalog-heading h1 { font-size:29px }
+  #platform h2,#platform .section-title h2 { font-size:22px }
+  #platform .hero.dashboard-hero { padding:24px; min-height:155px }
+  #platform .dashboard-hero h1 { font-size:27px }
+  #platform .dashboard-stats,#platform .catalog-stats { grid-template-columns:repeat(2,minmax(0,1fr)); row-gap:22px; padding:20px 6px }
+  #platform :is(.dashboard-stats,.catalog-stats)>div>b,#platform .analytics-card>b { font-size:32px }
+  #platform .nav { padding:12px 16px; gap:10px }
+  #platform .nav-link { font-size:14px; padding:10px }
+  #platform .subject-card,#platform .roster-panel { padding:16px }
+  #platform .subject-heading h2 { font-size:21px }
+  #platform .class-heading h3 { font-size:18px }
+  #platform .learning-file-tabs { display:flex; width:100%; overflow-x:auto }
+  #platform .learning-file-tabs button,#platform .review-tabs button { font-size:14px; padding:11px 13px; flex:none }
+  #platform .roster-stats>div:last-child { grid-column:1/-1 }
+  #platform .roster-savebar { position:static; padding:16px; flex-wrap:wrap }
+  #platform .roster-savebar>.actions { width:100%; justify-content:flex-end }
+  #platform .roster-savebar .primary { min-width:0; flex:1 }
+  #platform .teaching-class-card .actions>a { padding:10px 12px; font-size:14px }
+  #platform .roster-table thead { display:none }
+  #platform .roster-table tbody { display:grid; gap:12px }
+  #platform .roster-table tr { display:grid; grid-template-columns:42px minmax(0,1fr); border:1px solid #e0ebe3; border-radius:12px; padding:12px 8px }
+  #platform .roster-table td { padding:5px 8px; border:0; white-space:normal; grid-column:2 }
+  #platform .roster-table td:first-child { width:auto; grid-column:1; grid-row:1/4; display:flex; justify-content:center; padding-top:13px }
+  #platform .roster-table td:nth-child(3)::before { content:"账号："; color:#708579; font-size:13px }
+  #platform .roster-person { gap:8px }
+}
+#platform .learning-plan-details { border:1px solid var(--focus-line); border-radius:15px; background:#fff; margin:22px 0 }
+#platform .learning-plan-details>summary { display:flex; align-items:center; gap:14px; flex-wrap:wrap; list-style:none; cursor:pointer; padding:18px 22px; font-size:16px; font-weight:650; color:#26583f }
+#platform .learning-plan-details>summary::-webkit-details-marker { display:none }
+#platform .learning-plan-details>summary>span { color:#6c8275; font-size:14px; font-weight:400 }
+#platform .learning-plan-details>summary::after { content:"展开"; margin-left:auto; font-size:14px; color:#146c53 }
+#platform .learning-plan-details[open]>summary::after { content:"收起" }
+#platform .learning-plan-details>section { margin:0; border:0; border-radius:0; box-shadow:none; border-top:1px solid #e6eee8 }

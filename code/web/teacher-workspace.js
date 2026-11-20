@@ -5,6 +5,7 @@ import {initializeApiKey, ensureApiKey, openApiKeyDialog} from "/static/ai-key.j
 export function workspaceNav(ctx, course, active) {
   const tabs = [
     ["settings", "edit-course", "课程设置", "layers", {section:"settings"}],
+    ["students", "class-students", "班级学生", "user", {}],
     ["content", "edit-course", "章节与资料", "book", {section:"content"}],
     ["questions", "edit-course", "课程题库", "target", {section:"questions"}],
     ["assignments", "assignments", "作业管理", "check", {}],

@@ -1,5 +1,9 @@
 /* Clear hierarchy, legible controls and explicit teaching-class membership. */
-#platform { --accent:#146c53; --focus-line:#dce7e1; background:#f3f6f5; font-size:15px; color:#193c31 }
+#platform {
+  --accent:#146c53; --focus-line:#dce7e1;
+  --metric-label-size:18px; --metric-label-color:#38574a;
+  background:#f3f6f5; font-size:15px; color:#193c31;
+}
 #platform .shell { max-width:1360px; padding:32px 36px }
 #platform h1,#platform .catalog-heading h1 { font-size:38px; line-height:1.3; letter-spacing:-.8px }
 #platform h2,#platform .section-title h2 { font-size:25px; line-height:1.4 }
@@ -38,10 +42,57 @@
 #platform .dashboard-hero .muted { font-size:15px }
 #platform .hero-art { height:140px; transform:scale(.85) }
 #platform .dashboard-stats,#platform .catalog-stats { border-radius:18px; border-color:var(--focus-line); padding:24px 8px; box-shadow:0 6px 24px #1b433209; margin:24px 0 32px }
-#platform :is(.dashboard-stats,.catalog-stats)>div { padding:4px 14px }
+#platform :is(.dashboard-stats,.catalog-stats)>div { display:flex; flex-direction:column; align-items:flex-start; padding:4px 18px; gap:10px; text-align:left }
 #platform :is(.dashboard-stats,.catalog-stats)>div>b,#platform .analytics-card>b { font-size:38px; color:var(--accent); line-height:1.15; font-weight:750; font-variant-numeric:tabular-nums }
-#platform :is(.dashboard-stats,.catalog-stats)>div>span,#platform .analytics-card>span { font-size:14px; color:#5f786c; margin-top:9px }
+/* Match the legacy :not(.stat-icon) specificity so labels cannot fall back to 11px. */
+#platform :is(.dashboard-stats,.catalog-stats)>div>span,
+#platform .analytics-card>span:not(.stat-icon) {
+  display:block; font-size:var(--metric-label-size); font-weight:650;
+  line-height:1.5; color:var(--metric-label-color); margin-top:0; overflow-wrap:anywhere;
+}
+#platform .analytics-card>span:not(.stat-icon) { margin-top:12px }
+#platform .live-ticket>div { gap:10px; min-width:0 }
+#platform .live-ticket>div>span { font-size:var(--metric-label-size); font-weight:650; line-height:1.5; color:var(--metric-label-color) }
+#platform .live-ticket b { font-size:32px; line-height:1.25; overflow-wrap:anywhere }
 #platform .analytics-card { padding:25px; border-radius:16px }
+#platform .analytics-grid { align-items:stretch }
+#platform .analytics-card>.stat-icon { margin-top:0 }
+#platform .analysis-head>strong { font-size:32px }
+#platform .analysis-head>strong small,#platform .score small {
+  font-size:16px; line-height:1.5; font-weight:600; color:var(--metric-label-color); margin-top:7px;
+}
+#platform .analysis-head>div>small { font-size:15px; line-height:1.6; color:#4d685b }
+#platform .radar { max-width:360px }
+#platform .radar text { font-size:17px; fill:var(--metric-label-color); font-weight:600 }
+#platform .radar text .radar-value { font-size:18px; fill:var(--accent); font-weight:700 }
+#platform .radar-legend>span {
+  display:flex; flex-direction:column; align-items:flex-start; gap:6px; padding:14px 16px;
+  font-size:var(--metric-label-size); font-weight:650; line-height:1.5; color:var(--metric-label-color);
+}
+#platform .radar-legend b { font-size:26px; margin:0; line-height:1.2 }
+#platform .assignment-stats { gap:18px 24px; font-size:var(--metric-label-size); font-weight:600; line-height:1.5; color:var(--metric-label-color) }
+#platform .assignment-stats b { font-size:28px; line-height:1.2; margin-bottom:8px }
+#platform .assignment-counts { font-size:16px; font-weight:600; color:var(--metric-label-color) }
+#platform .assignment-counts b { font-size:28px }
+#platform .selection-total span,#platform .plan-streak>span { font-size:var(--metric-label-size); color:var(--metric-label-color); font-weight:600; line-height:1.5 }
+#platform .plan-goal-head { font-size:var(--metric-label-size); color:var(--metric-label-color); font-weight:600 }
+#platform .plan-goal-head b { font-size:23px }
+#platform table { font-size:15px }
+#platform th { font-size:15px; font-weight:650; color:#425f51 }
+#platform th small { font-size:14px; color:#4d685b }
+#platform table.gradebook { font-size:15px }
+#platform table.gradebook thead th { font-size:16px; color:#38574a }
+#platform table.gradebook td b { font-size:20px }
+#platform table.gradebook thead th small,#platform table.gradebook th.sticky small { font-size:14px; font-weight:600; line-height:1.5; color:#425f51 }
+#platform table.gradebook td small { font-size:13px; line-height:1.5; color:#526b5d }
+#platform .gradebook .analysis-link { font-size:14px; min-height:44px; padding:10px 12px }
+#platform :is(.gradebook-toolbar,.catalog-toolbar,.learning-record-toolbar,.review-filters,.assignment-list-toolbar,.roster-toolbar)>label,
+#platform label.inline-select {
+  font-size:15px; color:var(--metric-label-color); font-weight:650;
+}
+#platform :is(.gradebook-toolbar,.catalog-toolbar,.learning-record-toolbar,.review-filters,.assignment-list-toolbar,.roster-toolbar) :is(select,input),
+#platform label.inline-select select { font-size:16px }
+#platform .live-count { font-size:16px; font-weight:650; color:var(--metric-label-color) }
 #platform .subject-grid { gap:24px }
 #platform .subject-card { padding:24px; border-radius:18px; border-color:var(--focus-line); box-shadow:0 4px 18px #21473205 }
 #platform .subject-heading { margin-bottom:20px }
@@ -88,7 +139,6 @@
 #platform .assignment-card-head small { font-size:13px }
 #platform .study-note summary,#platform .study-note>div { font-size:14px }
 #platform .plan-streak b { font-size:38px }
-#platform .plan-goal-head b { font-size:20px }
 #platform .plan-board-head p { font-size:14px }
 #platform .plan-goal small { font-size:13px }
 #platform .calendar-day { min-height:78px; padding:10px 6px; border-radius:12px }
@@ -123,6 +173,7 @@
   #platform .nav-links { order:3; width:100%; flex:auto; justify-content:flex-start; overflow-x:auto; gap:6px; padding-bottom:2px }
 }
 @media(max-width:700px) {
+  #platform { --metric-label-size:16px }
   #platform .shell { padding:22px 16px }
   #platform h1,#platform .catalog-heading h1 { font-size:29px }
   #platform h2,#platform .section-title h2 { font-size:22px }
@@ -133,6 +184,7 @@
   #platform .nav { padding:12px 16px; gap:10px }
   #platform .nav-link { font-size:14px; padding:10px }
   #platform .subject-card,#platform .roster-panel { padding:16px }
+  #platform .catalog-toolbar { grid-template-columns:repeat(2,minmax(0,1fr)) }
   #platform .subject-heading h2 { font-size:21px }
   #platform .class-heading h3 { font-size:18px }
   #platform .learning-file-tabs { display:flex; width:100%; overflow-x:auto }

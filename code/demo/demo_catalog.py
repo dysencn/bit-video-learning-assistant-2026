@@ -229,8 +229,10 @@ def seed_activity(data, accounts):
         number = next((n for n in plans if student["id"] == f"student-demo-{n}"), None)
         if number is None:
             continue
+        from .enrollments import is_enrolled
         chosen = [course for course in courses.values() if course.get("demo") and course.get("status") == "published"
-                  and student.get("major_id") in course["major_ids"]]
+                  and student.get("major_id") in course["major_ids"]
+                  and (data.get("enrollments_version") != 1 or is_enrolled(course, student, data.get("enrollments", [])))]
         for course in chosen:
             points = {point["id"]: point["name"] for point in course["knowledge_points"]}
             for ci, correct_count in enumerate(plans[number]):

@@ -26,6 +26,7 @@ from pptx import Presentation
 from demo.jobs import JobManager
 from demo.media import ffmpeg_path, run_ffmpeg
 from demo.accounts import AccountStore, DEMO_TEACHER, DEMO_STUDENT
+from enrollment_fixtures import enroll_matching_students
 from demo.app import LearningStore, sm2_interval, sm2_quality
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -256,6 +257,7 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(caught.exception.code, 403)
         course = self.json_request("/api/courses", {"title": "端到端测试课程", "description": "发布到学习反馈"})
         cid = course["id"]
+        enroll_matching_students(self, cid)
         self.assertEqual(course["teacher_id"], DEMO_TEACHER)
         self.assertNotIn(cid, [c["id"] for c in self.json_request("/api/courses", account="teacher-demo-2")])
         for viewer in [DEMO_STUDENT, "teacher-demo-2"]:
@@ -349,6 +351,7 @@ class DemoIntegrationTest(unittest.TestCase):
     def test_12_wrong_questions_auto_archive_and_mastered(self):
         course = self.json_request("/api/courses", {"title": "错题本测试课程", "description": "验证错题归档"})
         cid = course["id"]
+        enroll_matching_students(self, cid)
         course = self.json_request(f"/api/courses/{cid}/questions", {"text": "Python 中变量用于？",
                                                                      "options": ["保存数据", "删除文件", "打印输出"],
                                                                      "answer": 0, "knowledge_point": "变量概念"})
@@ -386,6 +389,7 @@ class DemoIntegrationTest(unittest.TestCase):
     def test_13_duplicate_submission_does_not_duplicate_record(self):
         course = self.json_request("/api/courses", {"title": "防重复提交测试课程", "description": "验证同次重复点击"})
         cid = course["id"]
+        enroll_matching_students(self, cid)
         course = self.json_request(f"/api/courses/{cid}/questions", {"text": "1+1=?", "options": ["1", "2"], "answer": 1})
         qid = course["questions"][0]["id"]
         self.json_request(f"/api/courses/{cid}/resources", {"name": "课件", "kind": "课件"})
@@ -407,6 +411,7 @@ class DemoIntegrationTest(unittest.TestCase):
     def test_14_spaced_repetition_review_schedule(self):
         course = self.json_request("/api/courses", {"title": "复习引擎测试课程", "description": "验证间隔重复调度"})
         cid = course["id"]
+        enroll_matching_students(self, cid)
         course = self.json_request(f"/api/courses/{cid}/questions", {"text": "2+2=?", "options": ["3", "4", "5"],
                                                                      "answer": 1, "knowledge_point": "算术"})
         qid = course["questions"][0]["id"]
@@ -463,6 +468,7 @@ class DemoIntegrationTest(unittest.TestCase):
         course = self.json_request("/api/courses", {"title": "人工智能导论", "major_ids": ["m-ai"]}, account=DEMO_TEACHER)
         self.assertEqual(course["major_ids"], ["m-ai"])
         cid = course["id"]
+        enroll_matching_students(self, cid)
         with self.assertRaises(HTTPError) as caught:
             self.json_request("/api/courses/" + cid, account="student-demo-2")
         self.assertEqual(caught.exception.code, 404)
@@ -523,6 +529,7 @@ class DemoIntegrationTest(unittest.TestCase):
     def test_17_live_quiz_realtime_flow_without_grade(self):
         course = self.json_request("/api/courses", {"title": "课堂抢答测试课程", "major_ids": ["m-soft"]})
         cid = course["id"]
+        enroll_matching_students(self, cid)
         course = self.json_request(f"/api/courses/{cid}/questions", {"text": "HTTP 中读取资源的方法是？",
                                                                      "options": ["GET", "POST"], "answer": 0,
                                                                      "knowledge_point": "HTTP 方法"})
@@ -587,6 +594,7 @@ class DemoIntegrationTest(unittest.TestCase):
     def test_18_wrong_question_filters_and_csv_export(self):
         course = self.json_request("/api/courses", {"title": "错题导出测试课程", "description": "验证筛选与导出"})
         cid = course["id"]
+        enroll_matching_students(self, cid)
         first = self.json_request(f"/api/courses/{cid}/questions", {"text": "变量用于做什么？", "options": ["保存数据", "删除文件"],
                                                                      "answer": 0, "knowledge_point": "变量概念"})
         second = self.json_request(f"/api/courses/{cid}/questions", {"text": "2+2=?", "options": ["3", "4"],

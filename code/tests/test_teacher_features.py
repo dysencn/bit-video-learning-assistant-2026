@@ -15,6 +15,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 
 import uvicorn
 
+from enrollment_fixtures import enroll_matching_students
 from demo.app import create_app
 
 TEACHER = "teacher-demo-1"
@@ -87,6 +88,7 @@ class TeacherFeatureTests(unittest.TestCase):
     def course(self, title="测试课程", major_ids=None, publish=True):
         course = self.request("/api/courses", {"title": title, "major_ids": major_ids or ["m-soft"]})
         cid = course["id"]
+        enroll_matching_students(self, cid)
         self.request(f"/api/courses/{cid}/resources", {"name": "课程讲义", "kind": "图文讲义"}, account=TEACHER)
         question = self.request(f"/api/courses/{cid}/questions", {
             "text": "1 + 1 等于几？", "options": ["2", "3", "4", "5"], "answer": 0,

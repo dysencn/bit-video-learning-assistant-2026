@@ -13,6 +13,7 @@ from urllib.error import HTTPError
 from urllib.request import Request, build_opener, HTTPCookieProcessor
 
 import uvicorn
+from enrollment_fixtures import enroll_matching_students
 from demo.app import create_app, LearningStore
 from demo.analyses import AnalysisManager, AnalysisError, submission_evidence, ACTIVE
 from demo.summaries import SummaryError
@@ -81,6 +82,7 @@ class AnalysisHTTPTests(unittest.TestCase):
         self.request(f'/api/courses/{self.cid}/resources',{'name':'学习说明'},'teacher-demo-1')
         for i in range(2):
             course=self.request(f'/api/courses/{self.cid}/questions',{'text':f'原题 {i+1}','options':['甲','乙','丙','丁'],'answer':i,'explanation':f'原解析 {i+1}'},'teacher-demo-1')
+        enroll_matching_students(self, self.cid)
         self.request(f'/api/courses/{self.cid}/publish',{},'teacher-demo-1')
         self.questions=course['questions']
         self.record=self.request(f'/api/courses/{self.cid}/submissions',{'answers':{self.questions[0]['id']:0,self.questions[1]['id']:3}})

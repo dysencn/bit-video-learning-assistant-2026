@@ -1,19 +1,16 @@
 """Shared, submission-based profiles for teacher and student views."""
 from collections import Counter
+from .enrollments import is_enrolled as accepts_student
 
 
-def accepts_student(course, student):
-    return student.get("major_id") in course.get("major_ids", [])
-
-
-def build_profiles(courses, submissions, students):
+def build_profiles(courses, submissions, students, enrollments):
     """All four axes share a course scope; no marks are invented for empty data."""
     course_by_id = {course["id"]: course for course in courses}
     records = [record for record in submissions if record["course_id"] in course_by_id]
     published = [course for course in courses if course["status"] == "published"]
     participants = {record["student_id"] for record in records}
     roster = [student for student in students if student["id"] in participants
-              or any(accepts_student(course, student) for course in published)]
+              or any(accepts_student(course, student, enrollments) for course in published)]
     profiles = []
     for student in roster:
         items = [record for record in records if record["student_id"] == student["id"]]
@@ -31,7 +28,7 @@ def build_profiles(courses, submissions, students):
                         questions.get(detail["question_id"], {}).get("knowledge_point_id"), "未分类")
                     weak[point] += 1
         average = round(sum(item["score"] for item in items) / len(items)) if items else None
-        eligible = {course["id"] for course in published if accepts_student(course, student)}
+        eligible = {course["id"] for course in published if accepts_student(course, student, enrollments)}
         attempted = {record["course_id"] for record in items}
         profiles.append({
             "student_id": student["id"], "student": student["name"], "major_id": student.get("major_id"),
@@ -51,10 +48,13 @@ def build_profiles(courses, submissions, students):
                                            p["student_id"]))
 
 
-def teacher_analytics(courses, submissions, students):
+def teacher_analytics(courses, submissions, students, enrollments):
     course_ids = {course["id"] for course in courses}
-    records = [record for record in submissions if record["course_id"] in course_ids]
-    profiles = build_profiles(courses, records, students)
+    member_pairs = {(row["student_id"], row["course_id"]) for row in enrollments
+                    if row.get("status", "active") == "active"}
+    records = [record for record in submissions if record["course_id"] in course_ids
+               and (record["student_id"], record["course_id"]) in member_pairs]
+    profiles = build_profiles(courses, records, students, enrollments)
     stats = []
     for course in courses:
         items = [record for record in records if record["course_id"] == course["id"]]

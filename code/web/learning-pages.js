@@ -3,6 +3,7 @@ import {esc, icon, radarCard, number, stateTag} from "/static/ui.js";
 
 const expandedStudents = new Set();
 const reviewState = {tab: "today", course: "all", chapter: "all", point: "all", calDay: null, results: []};
+const pointName = item => item.knowledge_point_name || "未分类";
 const date = value => value ? new Date(value).toLocaleString("zh-CN") : "暂无";
 const day = value => new Date(value).toLocaleDateString("zh-CN", {month:"long", day:"numeric"});
 const dayKey = value => {
@@ -54,9 +55,14 @@ export async function personalProfilePage(ctx) {
   root.querySelector("#refresh").onclick = () => personalProfilePage(ctx).catch(error => tell(error.message));
 }
 
-export async function reviewCenter(ctx, initialTab) {
+export async function reviewCenter(ctx, initialTab, initialFilters) {
   const {api, post, layout, root, tell, link, fileUrl} = ctx;
-  if (initialTab) reviewState.tab = initialTab;
+  if (["today", "all", "mastered"].includes(initialTab)) reviewState.tab = initialTab;
+  if (initialFilters?.course && initialFilters.point) {
+    reviewState.course = initialFilters.course;
+    reviewState.chapter = "all";
+    reviewState.point = `id:${initialFilters.point}`;
+  }
   const [items, courses] = await Promise.all([api("/api/wrong-questions"), api("/api/courses")]);
   const now = Date.now(), nowKey = dayKey(now);
   const unresolved = items.filter(item => item.status !== "mastered");
@@ -67,12 +73,15 @@ export async function reviewCenter(ctx, initialTab) {
   const scoped = items.filter(item => reviewState.course === "all" || item.course_id === reviewState.course);
   const chapters = [...new Set(scoped.map(item => item.chapter_title || "未分章节"))];
   if (!chapters.includes(reviewState.chapter)) reviewState.chapter = "all";
-  const points = [...new Set(scoped.filter(item => reviewState.chapter === "all" || (item.chapter_title || "未分章节") === reviewState.chapter)
-    .map(item => item.knowledge_point_name || "未分类"))];
-  if (!points.includes(reviewState.point)) reviewState.point = "all";
+  const pointItems = scoped.filter(item => reviewState.chapter === "all" || (item.chapter_title || "未分章节") === reviewState.chapter);
+  const points = new Map(pointItems.map(item => [`name:${pointName(item)}`, pointName(item)]));
+  const graphItem = pointItems.find(item => item.knowledge_point_id && `id:${item.knowledge_point_id}` === reviewState.point);
+  if (graphItem) points.set(reviewState.point, `${pointName(graphItem)}（图谱节点）`);
+  if (!points.has(reviewState.point)) reviewState.point = "all";
   const matches = item => (reviewState.course === "all" || item.course_id === reviewState.course)
     && (reviewState.chapter === "all" || (item.chapter_title || "未分章节") === reviewState.chapter)
-    && (reviewState.point === "all" || (item.knowledge_point_name || "未分类") === reviewState.point);
+    && (reviewState.point === "all" || `name:${pointName(item)}` === reviewState.point
+        || `id:${item.knowledge_point_id}` === reviewState.point);
   const calendarDays = Array.from({length: 14}, (_, index) => {
     const value = new Date(now); value.setHours(0, 0, 0, 0); value.setDate(value.getDate() + index);
     const key = dayKey(value);
@@ -113,14 +122,15 @@ export async function reviewCenter(ctx, initialTab) {
   const filters = new URLSearchParams();
   if (reviewState.course !== "all") filters.set("course_id", reviewState.course);
   if (reviewState.chapter !== "all") filters.set("chapter", reviewState.chapter);
-  if (reviewState.point !== "all") filters.set("knowledge_point", reviewState.point);
+  if (reviewState.point.startsWith("id:")) filters.set("knowledge_point_id", reviewState.point.slice(3));
+  else if (reviewState.point.startsWith("name:")) filters.set("knowledge_point", reviewState.point.slice(5));
   const exportUrl = fileUrl(`/api/wrong-questions/export.csv${filters.toString() ? `?${filters}` : ""}`);
   const calendar = `<section class="review-calendar"><div class="section-title"><div><span class="eyebrow">SCHEDULE</span><h2>复习日历</h2><p class="muted">未来 14 天的到期安排，逾期题目已并入今天。</p></div><span class="muted">${unresolved.length} 题待巩固${beyond.length ? ` · 另有 ${beyond.length} 题在 14 天后` : ""}</span></div><div class="calendar-strip" role="list">${calendarDays.map(item => {
     const count = (buckets.get(item.key) || []).filter(matches).length;
     return `<button type="button" role="listitem" class="calendar-day ${item.today ? "is-today" : ""} ${item.key === reviewState.calDay ? "is-active" : ""}" data-day="${item.key}" aria-pressed="${item.key === reviewState.calDay}"><span class="calendar-week">${item.today ? "今天" : `周${item.week}`}</span><b>${item.month}/${item.day}</b><small class="${count ? "has-load" : ""}">${count ? `${count} 题` : "—"}</small></button>`;
   }).join("")}</div></section>`;
   const results = reviewState.results.length ? `<section class="review-results" aria-live="polite"><div class="section-title"><h2>本次复习反馈</h2><span class="tag published">完成 ${reviewState.results.length} 题</span></div>${reviewState.results.map(result => `<div class="review-result ${result.correct ? "correct" : "incorrect"}"><b>${result.correct ? "答对了" : "再巩固一下"} · ${esc(result.question_snapshot.text)}</b><p>正确答案：${esc(result.question_snapshot.options[result.answer])}</p>${result.question_snapshot.explanation ? `<p>${esc(result.question_snapshot.explanation)}</p>` : ""}<small>${result.status === "mastered" ? "本题已掌握，已退出复习队列。" : `下次复习 ${day(result.next_review_at)}，间隔 ${result.review_interval_days} 天。`}</small></div>`).join("")}</section>` : "";
-  layout(`<div class="page-heading"><div><span class="eyebrow">REVIEW & GROW</span><h1>把错题，变成下一次的进步</h1><p class="muted">错题归档与到期复习，一处完成。答对延长间隔，答错回到 1 天，复习不计入成绩。</p></div><button class="ghost" id="refresh">${icon("refresh")}刷新</button></div><div class="review-stats">${counts.map(([count,label,graphic]) => `<div class="analytics-card"><span class="stat-icon">${icon(graphic)}</span><b>${count}</b><span>${label}</span></div>`).join("")}</div>${calendar}<section class="review-workspace"><div class="review-toolbar"><div class="review-tabs" role="tablist" aria-label="错题与复习视图">${[["today","今日复习",dueToday],["all","全部错题",items.length],["mastered","已掌握",mastered.length]].map(([tab,label,count]) => `<button type="button" role="tab" data-tab="${tab}" aria-selected="${reviewState.tab === tab}" aria-controls="review-content">${label}<span>${count}</span></button>`).join("")}</div><div class="review-filters"><label>课程<select id="course-filter"><option value="all">全部课程</option>${[...names].map(([id,name]) => `<option value="${esc(id)}" ${reviewState.course === id ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label><label>章节<select id="chapter-filter"><option value="all">全部章节</option>${chapters.map(chapter => `<option ${reviewState.chapter === chapter ? "selected" : ""}>${esc(chapter)}</option>`).join("")}</select></label><label>知识点<select id="point-filter"><option value="all">全部知识点</option>${points.map(point => `<option ${reviewState.point === point ? "selected" : ""}>${esc(point)}</option>`).join("")}</select></label><a class="secondary" href="${esc(exportUrl)}" download>${icon("arrow")}导出 CSV</a></div></div><div id="review-content" role="tabpanel" class="review-content">${body}</div></section>${results}${reviewState.tab === "today" && upcoming.length ? `<section><div class="section-title"><h2>接下来的复习安排</h2><span class="muted">还有 ${upcoming.length} 题未到期</span></div><div class="record-list">${upcoming.map(item => `<div class="record-row"><div><b>${esc(item.question_snapshot.text)}</b><small>${esc(names.get(item.course_id))} · ${esc(item.knowledge_point_name)}</small></div><span class="tag neutral">${day(item.next_review_at)}</span></div>`).join("")}</div></section>` : ""}`, "错题与复习");
+  layout(`<div class="page-heading"><div><span class="eyebrow">REVIEW & GROW</span><h1>把错题，变成下一次的进步</h1><p class="muted">错题归档与到期复习，一处完成。答对延长间隔，答错回到 1 天，复习不计入成绩。</p></div><button class="ghost" id="refresh">${icon("refresh")}刷新</button></div><div class="review-stats">${counts.map(([count,label,graphic]) => `<div class="analytics-card"><span class="stat-icon">${icon(graphic)}</span><b>${count}</b><span>${label}</span></div>`).join("")}</div>${calendar}<section class="review-workspace"><div class="review-toolbar"><div class="review-tabs" role="tablist" aria-label="错题与复习视图">${[["today","今日复习",dueToday],["all","全部错题",items.length],["mastered","已掌握",mastered.length]].map(([tab,label,count]) => `<button type="button" role="tab" data-tab="${tab}" aria-selected="${reviewState.tab === tab}" aria-controls="review-content">${label}<span>${count}</span></button>`).join("")}</div><div class="review-filters"><label>课程<select id="course-filter"><option value="all">全部课程</option>${[...names].map(([id,name]) => `<option value="${esc(id)}" ${reviewState.course === id ? "selected" : ""}>${esc(name)}</option>`).join("")}</select></label><label>章节<select id="chapter-filter"><option value="all">全部章节</option>${chapters.map(chapter => `<option ${reviewState.chapter === chapter ? "selected" : ""}>${esc(chapter)}</option>`).join("")}</select></label><label>知识点<select id="point-filter"><option value="all">全部知识点</option>${[...points].map(([id, point]) => `<option value="${esc(id)}" ${reviewState.point === id ? "selected" : ""}>${esc(point)}</option>`).join("")}</select></label><a class="secondary" href="${esc(exportUrl)}" download>${icon("arrow")}导出 CSV</a></div></div><div id="review-content" role="tabpanel" class="review-content">${body}</div></section>${results}${reviewState.tab === "today" && upcoming.length ? `<section><div class="section-title"><h2>接下来的复习安排</h2><span class="muted">还有 ${upcoming.length} 题未到期</span></div><div class="record-list">${upcoming.map(item => `<div class="record-row"><div><b>${esc(item.question_snapshot.text)}</b><small>${esc(names.get(item.course_id))} · ${esc(item.knowledge_point_name)}</small></div><span class="tag neutral">${day(item.next_review_at)}</span></div>`).join("")}</div></section>` : ""}`, "错题与复习");
   const reload = () => reviewCenter(ctx).catch(error => tell(error.message));
   root.querySelectorAll("[data-tab]").forEach(button => { button.onclick = () => { reviewState.tab = button.dataset.tab; reload(); }; });
   root.querySelector(".review-tabs").onkeydown = event => {

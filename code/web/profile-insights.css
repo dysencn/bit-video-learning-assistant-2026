@@ -1,0 +1,9 @@
+/* Presentation for the additional student profile metrics. */
+#platform .profile-insights { margin:20px 0; padding:18px; background:#edf6f0; border:1px solid #c3dccb; border-radius:12px; }
+#platform .profile-insights h4 { margin:0 0 12px; font-size:16px; }
+#platform .insight-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(105px,1fr)); gap:10px; }
+#platform .insight-grid div { background:white; border-radius:8px; padding:10px; }
+#platform .insight-grid strong,#platform .insight-grid span { display:block; }
+#platform .insight-grid strong { color:#145c43; font-size:18px; }
+#platform .insight-grid span,#platform .profile-insights p { color:#486256; font-size:13px; }
+#platform .profile-insights p { margin:12px 0 0; }

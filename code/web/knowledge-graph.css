@@ -1,0 +1,116 @@
+#platform .graph-workspace,
+#platform .graph-edit-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(0, 1fr);
+  gap: 18px;
+}
+
+#platform .graph-workspace > .editor {
+  padding: 22px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+}
+
+#platform .graph-scroll {
+  overflow-x: auto;
+  margin-top: 16px;
+  border-radius: 10px;
+  background: #eff6f1;
+}
+
+#platform .graph-surface {
+  --graph-edge: #5a8a79;
+  position: relative;
+  display: flex;
+  gap: 36px;
+  align-items: center;
+  width: max-content;
+  min-width: 100%;
+  padding: 18px;
+}
+
+#platform .graph-surface canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+#platform .graph-column {
+  position: relative;
+  display: grid;
+  gap: 12px;
+  width: 155px;
+}
+
+#platform .graph-point {
+  padding: 9px 12px;
+  border: 1px solid #9fbdad;
+  border-radius: 9px;
+  background: #fff;
+  color: var(--ink);
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+
+#platform .graph-point[aria-pressed="true"] {
+  background: var(--green);
+  border-color: var(--green);
+  color: white;
+}
+
+#platform .graph-statistics {
+  display: grid;
+  gap: 8px;
+}
+
+#platform .graph-statistics div {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#platform .graph-statistics dd {
+  margin: 0;
+  font-weight: 700;
+}
+
+#platform .graph-source-list {
+  padding-inline-start: 20px;
+}
+
+#platform .graph-edit-grid {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#platform .graph-edit-grid form {
+  display: grid;
+  gap: 8px;
+  align-items: end;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+#platform .graph-edit-list {
+  padding: 0;
+  margin: 10px 0;
+  list-style: none;
+}
+
+#platform .graph-edit-list > li {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 5px 0;
+  gap: 10px;
+}
+
+@media (max-width: 730px) {
+  #platform .graph-workspace,
+  #platform .graph-edit-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

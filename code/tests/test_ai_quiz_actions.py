@@ -14,7 +14,7 @@ from urllib.request import Request, build_opener, HTTPCookieProcessor
 import uuid
 
 import uvicorn
-from demo.app import create_app, LearningStore
+from demo.app import create_app, knowledge_schedule, LearningStore
 from test_quizzes import FIXTURE
 
 
@@ -32,7 +32,8 @@ class QuizActionTests(unittest.TestCase):
             time.sleep(.02)
         cls.client=build_opener(HTTPCookieProcessor(CookieJar()));cls.token=""
         cls.token=cls.req("/api/config")["token"]
-        for name,password in [("student1","Learn123!"),("student2","Learn456!"),("teacher1","Teach123!"),("teacher2","Teach456!")]:
+        for name,password in [("student1","Learn123!"),("student2","Learn456!"),("student4","Learn123!"),
+                              ("teacher1","Teach123!"),("teacher2","Teach456!")]:
             cls.req("/api/auth/login",{"username":name,"password":password})
 
     @classmethod
@@ -47,8 +48,8 @@ class QuizActionTests(unittest.TestCase):
             body=response.read()
             return json.loads(body) if "application/json" in response.headers.get("Content-Type","") else body.decode("utf-8-sig")
 
-    def error(self,status,path,payload=None,account="student-demo-1"):
-        with self.assertRaises(HTTPError) as caught:self.req(path,payload,account)
+    def error(self,status,path,payload=None,account="student-demo-1",method=None):
+        with self.assertRaises(HTTPError) as caught:self.req(path,payload,account,method)
         self.assertEqual(caught.exception.code,status);caught.exception.close()
 
     def setUp(self):
@@ -143,6 +144,123 @@ class QuizActionTests(unittest.TestCase):
         self.assertEqual(again["imported_ids"],[]);self.assertEqual(len(again["existing_ids"]),2)
         self.req(f"/api/jobs/{jid}",account="teacher-demo-1",method="DELETE")
         self.assertEqual(len(self.req("/api/courses/course-demo")["questions"]),len(before["questions"])+2)
+
+    def test_knowledge_graph_traces_video_to_practice_review_and_class_feedback(self):
+        teacher = "teacher-demo-1"
+        student = "student-demo-1"
+        course = self.req("/api/courses", {"title": "知识图谱验收", "major_ids": ["m-soft"]}, teacher)
+        cid = course["id"]
+        base = f"/api/courses/{cid}"
+        endpoint = f"{base}/knowledge-graph"
+        chapter = course["chapters"][0]["id"]
+        original = {"text": "本章已有题目", "options": ["正确", "错误"], "answer": 0, "chapter_id": chapter}
+        for name in ("变量", "循环", "列表"):
+            course = self.req(f"{base}/questions", {**original, "knowledge_point": name}, teacher)
+        variable, loop, sequence = [point["id"] for point in course["knowledge_points"]]
+        self.assertEqual(self.req(endpoint, account=teacher)["revision"], 0)
+        self.error(404, endpoint)
+
+        jid, quiz = self.make_quiz(teacher)
+        self.jobs.update(jid, result={"pages": [{"number": 1, "timestamp": 72.5}],
+                                      "metadata": {"duration": 90}})
+        slides = self.jobs.root / jid / "slides"
+        slides.mkdir()
+        (slides / "slide-0001.jpg").write_bytes(b"page fixture")
+        course = self.req(f"{base}/resources", {"name": "循环课件", "job_id": jid}, teacher)
+        resource_id = course["resources"][0]["id"]
+        qid = quiz["questions"][0]["id"]
+        payload = {"job_id": jid, "quiz_id": quiz["id"], "chapter_id": chapter,
+                   "question_ids": [qid], "knowledge_point_ids": {qid: loop}}
+        self.error(400, f"{base}/questions/import-ai", {**payload, "knowledge_point_ids": {qid: "kp1"}}, teacher)
+        imported = self.req(f"{base}/questions/import-ai", payload, teacher)
+        imported_id = imported["imported_ids"][0]
+        repeat = self.req(f"{base}/questions/import-ai", {**payload, "knowledge_point_ids": {qid: variable}}, teacher)
+        self.assertEqual(repeat["existing_ids"], [imported_id])
+        self.assertEqual(next(q for q in repeat["course"]["questions"] if q["id"] == imported_id)["knowledge_point_id"], loop)
+
+        edges = [{"before": variable, "after": loop}, {"before": loop, "after": sequence}]
+        source = {"knowledge_point_id": loop, "resource_id": resource_id, "page": 1}
+        update = {"revision": 0, "prerequisites": edges, "evidence": [source]}
+        self.error(400, endpoint, {**update, "prerequisites": edges + [{"before": sequence, "after": variable}]},
+                   teacher, "PUT")
+        self.error(400, endpoint, {**update, "evidence": [{**source, "page": 2}]}, teacher, "PUT")
+        self.error(400, endpoint, {**update, "evidence": [{**source, "resource_id": "res-demo"}]}, teacher, "PUT")
+        self.error(403, endpoint, update, student, "PUT")
+        self.error(404, endpoint, update, "teacher-demo-2", "PUT")
+        with patch.object(self.store, "save", side_effect=OSError("TEST disk full")):
+            self.error(507, endpoint, update, teacher, "PUT")
+        self.assertEqual(self.req(endpoint, account=teacher)["revision"], 0)
+        self.assertEqual(self.req(endpoint, update, teacher, "PUT"), {"revision": 1})
+        self.error(409, endpoint, update, teacher, "PUT")
+
+        self.req(f"{base}/enrollments", {"student_ids": [student, "student-demo-4"]}, teacher, "PUT")
+        self.req(f"{base}/publish", {}, teacher)
+        self.error(404, endpoint, account="teacher-demo-2")
+        self.error(404, endpoint, account="student-demo-2")
+        def node(graph):
+            return next(item for item in graph["nodes"] if item["id"] == loop)
+
+        initial = node(self.req(endpoint))
+        self.assertIsNone(initial["accuracy"])
+        self.assertEqual(initial["evidence"][0]["timestamp"], 72.5)
+        self.assertEqual(self.req(f"/api/jobs/{jid}/pages/1"), "page fixture")
+        self.assertNotIn("knowledge_graph", self.req(base))
+
+        # Make the wrong answer due on the test day without changing the scheduler.
+        answers = {q["id"]: q["answer"] for q in self.req(base)["questions"]}
+        correct = answers[imported_id]
+        answers[imported_id] = (correct + 1) % len(quiz["questions"][0]["options"])
+        with patch("demo.app._days_later", return_value="2000-01-01T00:00:00+00:00"):
+            submission = self.req(f"{base}/submissions", {"chapter_id": chapter, "answers": answers})
+        detail = next(item for item in submission["details"] if item["question_id"] == imported_id)
+        self.assertEqual(detail["knowledge_point_id"], loop)
+        legacy = deepcopy(submission)
+        for legacy_detail in legacy["details"]:
+            legacy_detail.pop("knowledge_point_id")
+        schedule = knowledge_schedule([legacy, submission])
+        self.assertEqual([item["answered"] for item in schedule if item["id"] == loop], [4])
+        wrongs = self.req(f"/api/wrong-questions?course_id={cid}&knowledge_point_id={loop}")
+        self.assertEqual(len(wrongs), 1)
+        wrong = wrongs[0]
+        self.assertEqual(wrong["question_id"], imported_id)
+        self.assertEqual(node(self.req(endpoint, account="student-demo-4"))["answered"], 0)
+        self.assertEqual(node(self.req(endpoint, account=teacher))["accuracy"], 50)
+        self.assertEqual(node(self.req(endpoint))["next_review_at"], wrong["next_review_at"])
+        self.assertIn(wrong["id"], {item["id"] for item in self.req("/api/review/due")})
+
+        review = self.req(f"/api/wrong-questions/{wrong['id']}/review", {"selected": correct})
+        self.assertTrue(review["correct"])
+        self.assertNotEqual(review["next_review_at"], wrong["next_review_at"])
+        self.assertEqual(node(self.req(endpoint))["next_review_at"], review["next_review_at"])
+        summary = node(self.req(endpoint, account=teacher))
+        self.assertEqual((summary["answered"], summary["correct"], summary["review_count"], summary["review_correct"]),
+                         (2, 1, 1, 1))
+        self.assertNotIn("next_review_at", summary)
+        self.assertEqual(self.req("/api/learning-records")[0]["score"], submission["score"])
+
+        copied = self.req(f"{base}/duplicate", {}, teacher)
+        copied_graph = self.req(f"/api/courses/{copied['id']}/knowledge-graph", account=teacher)
+        self.assertEqual(len(copied_graph["prerequisites"]), 2)
+        copied_loop = next(item for item in copied_graph["nodes"] if item["name"] == "循环")
+        self.assertNotEqual(copied_loop["id"], loop)
+        self.assertNotEqual(copied_loop["evidence"][0]["resource_id"], resource_id)
+        self.assertEqual(copied_loop["answered"], 0)
+        self.error(404, f"/api/courses/{copied['id']}/knowledge-graph", account="student-demo-4")
+
+        self.req(f"{base}/enrollments", {"student_ids": ["student-demo-4"]}, teacher, "PUT")
+        self.error(404, endpoint)
+        self.assertEqual(node(self.req(endpoint, account=teacher))["answered"], 0)
+        self.req(f"/api/jobs/{jid}", account=teacher, method="DELETE")
+        unavailable = node(self.req(endpoint, account=teacher))["evidence"][0]
+        self.assertFalse(unavailable["available"])
+        self.assertIsNone(unavailable["job_id"])
+        self.assertEqual(self.req(endpoint, {**update, "revision": 1}, teacher, "PUT"), {"revision": 2})
+        loaded = LearningStore(self.root / "learning-platform.json")
+        self.assertEqual(loaded.course(cid)["knowledge_graph"]["revision"], 2)
+        self.assertEqual(next(event for event in loaded.data["learning_events"] if event["ref_id"] == wrong["id"])
+                         ["knowledge_point_id"], loop)
+        self.assertEqual(self.req(f"/api/wrong-questions?course_id={cid}&knowledge_point_id={loop}")[0]["id"], wrong["id"])
+        self.assertEqual(self.req("/api/learning-records")[0]["score"], submission["score"])
 
 
 if __name__=="__main__":unittest.main()

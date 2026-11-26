@@ -114,7 +114,7 @@ class ProgrammingAdviceHTTPTests(unittest.TestCase):
         self.assertIn("attachment",headers["Content-Disposition"])
         with patch("demo.summaries.call_deepseek",side_effect=AssertionError("duplicate request")):
             self.assertEqual(self.request(endpoint+"/advice",{})["status"],"completed")
-        self.assertNotIn("fixture-code-key",(self.root/"programming-analyses"/state["id"]/"state.json").read_text())
+        self.assertNotIn("fixture-code-key",(self.root/"programming-analyses"/state["id"]/"state.json").read_text(encoding="utf-8"))
         manager=AnalysisManager(self.root/"programming-analyses")
         self.assertEqual(manager.html("student-demo-1",run["id"]),HTML);manager.close()
 

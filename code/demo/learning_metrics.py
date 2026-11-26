@@ -30,9 +30,17 @@ def build_profiles(courses, submissions, students, enrollments):
         average = round(sum(item["score"] for item in items) / len(items)) if items else None
         eligible = {course["id"] for course in published if accepts_student(course, student, enrollments)}
         attempted = {record["course_id"] for record in items}
+        ordered = sorted(items, key=lambda item: item.get("submitted_at", ""))
+        recent = ordered[-3:]
+        previous = ordered[-6:-3]
         profiles.append({
             "student_id": student["id"], "student": student["name"], "major_id": student.get("major_id"),
             "submission_count": len(items), "course_count": len(attempted),
+            "active_days": len({item.get("submitted_at", "")[:10] for item in items if item.get("submitted_at")}),
+            "pass_rate": round(sum(item["score"] >= 60 for item in items) / len(items) * 100) if items else None,
+            "recent_average": round(sum(item["score"] for item in recent) / len(recent)) if recent else None,
+            "score_change": round(sum(item["score"] for item in recent) / len(recent) - sum(item["score"] for item in previous) / len(previous)) if len(recent) == 3 and len(previous) == 3 else None,
+            "answered_count": total,
             "available_course_count": len(eligible), "average_score": average,
             "latest_submitted_at": max((item["submitted_at"] for item in items), default=None),
             "weak_points": [name for name, _ in weak.most_common(2)],

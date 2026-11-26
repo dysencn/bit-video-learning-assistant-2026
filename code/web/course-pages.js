@@ -258,6 +258,12 @@ async function teacherAnnouncementsPage(ctx) {
     <section><div class="section-title"><div><h2>${esc(course.title)}</h2><span class="muted">${announcements.length} 条公告</span></div></div><div class="announcement-list">${cards || '<div class="empty">还没有公告。</div>'}</div></section>
     <section><div class="section-title"><h2>发布公告</h2><span class="muted">收件人由服务端按课程范围计算</span></div><div class="editor"><form id="announcement-create"><label>标题<input name="title" maxlength="100" required placeholder="例如：本周作业提醒"></label><label>内容<textarea name="body" maxlength="5000" required placeholder="写清时间、任务和需要学生做的事"></textarea></label><div class="editor-fields"><label>受众<select name="audience"><option value="all">全体学生</option><option value="non_submitters">未提交学生</option><option value="at_risk">需关注学生</option></select></label><label class="check-row"><input type="checkbox" name="pinned"> 置顶公告</label></div><div class="actions"><button class="secondary" type="submit">发布公告</button></div></form></div></section>`, "公告管理");
   root.querySelector("#announcement-course").onchange = event => { location.href = href("announcements", {course:event.target.value}); };
+  const point = params.get("knowledge_point");
+  if (point) {
+    const form = root.querySelector("#announcement-create");
+    form.elements.title.value = `知识点讲评 · ${point}`.slice(0, 100);
+    form.scrollIntoView();
+  }
   root.querySelector("#announcement-create").onsubmit = async event => {
     event.preventDefault();
     try { await post(`/api/courses/${courseId}/announcements`, Object.fromEntries(new FormData(event.target))); await teacherAnnouncementsPage(ctx); tell("公告已发布"); }

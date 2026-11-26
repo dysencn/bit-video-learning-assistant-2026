@@ -1,9 +1,21 @@
 import {esc} from "/static/ui.js";
 import {courseLabel} from "/static/teaching-courses.js";
 
+export function knowledgePointOptions(points) {
+  return '<option value="">暂不关联</option>' + (points || []).map(point =>
+    `<option value="${esc(point.id)}">${esc(point.name)}</option>`
+  ).join("");
+}
+
+export function selectedKnowledgePoints(container, questionIds) {
+  return Object.fromEntries([...container.querySelectorAll("[data-import-point]")]
+    .filter(select => select.value && questionIds.includes(select.dataset.importPoint))
+    .map(select => [select.dataset.importPoint, select.value]));
+}
+
 // These actions only copy already generated questions. They never call the AI API.
 export function questionAction(question, role) {
-  if (role === "teacher") return `<div class="actions"><label><input type="checkbox" data-publish-question="${esc(question.id)}" checked> <span>选入课程练习</span></label></div><details><summary>审核正确答案与解析</summary><p>正确答案：${String.fromCharCode(65+question.answer)}. ${esc(question.options[question.answer])}</p><p>${esc(question.explanation)}</p></details>`;
+  if (role === "teacher") return `<div class="actions"><label><input type="checkbox" data-publish-question="${esc(question.id)}" checked> <span>选入课程练习</span></label><label>知识点<select data-import-point="${esc(question.id)}" disabled>${knowledgePointOptions([])}</select></label></div><details><summary>审核正确答案与解析</summary><p>正确答案：${String.fromCharCode(65+question.answer)}. ${esc(question.options[question.answer])}</p><p>${esc(question.explanation)}</p></details>`;
   return `<div class="actions"><button type="button" class="secondary" data-add-wrong="${esc(question.id)}" disabled>正在读取错题本…</button><small role="status" data-wrong-message="${esc(question.id)}"></small></div>`;
 }
 
@@ -57,9 +69,15 @@ export async function mountQuestionActions({ctx, quiz, jobId, request}) {
   panel.innerHTML = `<h2>发布为课程练习</h2><p class="muted">先核对每题的正确答案与解析，再勾选需要发布的题目。题目加入所选章节的自主练习题库。</p><div class="actions"><label>目标课程 / 教学班<select id="quiz-publish-course">${courses.map(course => `<option value="${esc(course.id)}">${esc(courseLabel(course))}${course.status === "published" ? " · 已发布" : " · 草稿"}</option>`).join("")}</select></label><label>目标章节<select id="quiz-publish-chapter"></select></label></div><p class="muted" id="quiz-publish-guide"></p><div class="actions"><button type="button" class="secondary" id="quiz-publish-select-all">全选未发布题目</button><button type="button" class="primary" id="quiz-publish-submit">发布到课程练习</button><span id="quiz-publish-count" role="status"></span></div><div id="quiz-publish-result" role="status"></div>`;
   const $ = id => panel.querySelector(`#${id}`);
   const checks = [...root.querySelectorAll("[data-publish-question]")];
+  const pointSelects = [...root.querySelectorAll("[data-import-point]")];
   let course, loading = false, saving = false, selection = 0;
   function count() {
-    const n = checks.filter(input => input.checked && !input.disabled).length;
+    const selected = checks.filter(input => input.checked && !input.disabled);
+    const n = selected.length;
+    for (const select of pointSelects) {
+      select.disabled = loading || saving || !course?.knowledge_points?.length
+        || !selected.some(input => input.dataset.publishQuestion === select.dataset.importPoint);
+    }
     $("quiz-publish-count").textContent = `已勾选 ${n} 道题`;
     $("quiz-publish-submit").disabled = loading || saving || !course || !n || !$("quiz-publish-chapter").value;
     $("quiz-publish-submit").textContent = saving ? "正在保存题目…" : course?.status === "published" ? "发布到课程练习" : "加入草稿题库";
@@ -76,6 +94,7 @@ export async function mountQuestionActions({ctx, quiz, jobId, request}) {
       if (current !== selection) return;
       course = selected;
       $("quiz-publish-chapter").innerHTML = course.chapters.map(ch => `<option value="${esc(ch.id)}">${esc(ch.title)}</option>`).join("");
+      pointSelects.forEach(select => { select.innerHTML = knowledgePointOptions(course.knowledge_points); });
       const imported = new Set(course.questions.filter(q => q.ai_source?.job_id === jobId && q.ai_source?.quiz_id === quiz.id).map(q => q.ai_source.question_id));
       checks.forEach(input => { input.disabled = imported.has(input.dataset.publishQuestion); input.checked = !input.disabled; input.defaultChecked = input.checked; input.nextElementSibling.textContent = input.disabled ? "已加入本课程题库" : "选入课程练习"; });
       $("quiz-publish-guide").textContent = course.status === "published" ? "已发布课程：保存后，面向该课程的学生刷新页面即可练习。重复发布会自动跳过已存在的题目。" : "草稿课程：本次只保存题库，需在课程管理完成发布后学生才可见。";
@@ -90,7 +109,10 @@ export async function mountQuestionActions({ctx, quiz, jobId, request}) {
     saving = true; count(); $("quiz-publish-course").disabled = true; $("quiz-publish-chapter").disabled = true;
     $("quiz-publish-result").textContent = "正在保存课程练习…";
     try {
-      const result = await send(`/api/courses/${encodeURIComponent(course.id)}/questions/import-ai`, {job_id:jobId, quiz_id:quiz.id, chapter_id:$("quiz-publish-chapter").value, question_ids:ids});
+      const result = await send(`/api/courses/${encodeURIComponent(course.id)}/questions/import-ai`, {
+        job_id:jobId, quiz_id:quiz.id, chapter_id:$("quiz-publish-chapter").value, question_ids:ids,
+        knowledge_point_ids:selectedKnowledgePoints(root, ids)
+      });
       course = result.course;
       const imported = new Set(course.questions.filter(q => q.ai_source?.job_id === jobId && q.ai_source?.quiz_id === quiz.id).map(q => q.ai_source.question_id));
       checks.forEach(input => { input.disabled = imported.has(input.dataset.publishQuestion); input.checked = !input.disabled; input.defaultChecked = input.checked; input.nextElementSibling.textContent = input.disabled ? "已加入本课程题库" : "选入课程练习"; });

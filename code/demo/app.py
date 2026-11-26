@@ -2904,7 +2904,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             assignments = {item["id"]: item for item in store.data.get("assignments", [])}
             visible = [_student_record_view(record, assignments, store.data["submissions"])
                        for record in store.data["submissions"]]
-            own = next((item for item in build_profiles(courses, visible, students)
+            own = next((item for item in build_profiles(courses, visible, students, store.data.get("enrollments", []))
                         if item["student_id"] == student["id"]), None)
             return portrait_payload(store.data, student, own, courses=courses)
 

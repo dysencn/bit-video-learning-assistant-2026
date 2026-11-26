@@ -931,6 +931,7 @@ class DemoIntegrationTest(unittest.TestCase):
         rid = resource["resources"][0]["id"]
         self.json_request(f"/api/courses/{cid}/questions",
                           {"text": "发布前需要有题目", "options": ["对", "错"], "answer": 0})
+        enroll_matching_students(self, cid)
         self.json_request(f"/api/courses/{cid}/publish", {})
         first = self.json_request(f"/api/courses/{cid}/resources/{rid}/reading", {"percent": 30},
                                   account=DEMO_STUDENT)

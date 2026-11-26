@@ -81,6 +81,8 @@ function nav() {
 }
 function layout(content, title) {
   document.title = `${title} · 知学`;
+  root.dataset.page = user ? page : "login";
+  root.dataset.role = user?.role || "guest";
   root.innerHTML = nav() + `<main class="shell">${user?.demo ? '<div class="demo-banner">演示账号</div>' : ""}${content}<footer class="platform-footer"><span>知学 · 把知识变成自己的能力</span></footer></main>`;
   const logout = root.querySelector("#logout");
   if (logout) logout.onclick = async () => {

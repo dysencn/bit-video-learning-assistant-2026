@@ -694,6 +694,13 @@ def parse_plan_text(text, courses, moment=None):
             "source": "rules", "notes": notes}
 
 
+def _visible_pending_reviews(data, student_id, submissions):
+    assignments = {item["id"]: item for item in (data.get("assignments") or [])}
+    return [record for record in (data.get("wrong_questions") or [])
+            if record.get("student_id") == student_id and record.get("status") != "mastered"
+            and record_answers_visible(record, assignments, submissions)]
+
+
 def estimate_plan_workload(data, student, courses):
     """把"学什么"折算成分钟：资料按字数（带兜底）、知识点、单选、编程、到期复习分别计时。"""
     sid = student["id"]
@@ -741,8 +748,7 @@ def estimate_plan_workload(data, student, courses):
             items.append({"kind": "code", "course_id": cid, "ref_id": question.get("id"),
                           "title": str(question.get("title") or "编程题")[:40],
                           "minutes": round(PLAN_ESTIMATE["code"])})
-    wrong = [record for record in (data.get("wrong_questions") or [])
-             if record.get("student_id") == sid and record.get("status") != "mastered"]
+    wrong = _visible_pending_reviews(data, sid, submissions)
     for record in wrong[:60]:
         text = (record.get("question_snapshot") or {}).get("text") or "错题复习"
         due_day = local_day(record.get("next_review_at")) if record.get("next_review_at") else None
@@ -861,6 +867,12 @@ def plan_today_cards(items, parsed, data, student, saved, today, days=None):
     if stale:
         cards = None
     activity = plan_day_activity(data, student, today)
+    if cards and any(card["kind"] == "review" for card in cards):
+        # A cached daily plan can predate answer-visibility checks.
+        reviews = _visible_pending_reviews(data, student["id"], data.get("submissions") or [])
+        visible_ids = {record["id"] for record in reviews} | activity["reviewed"]
+        cards = [card for card in cards if card["kind"] != "review" or card["ref_id"] in visible_ids]
+        tasks[key] = cards
     if not cards:
         scheduled = next((entry for entry in (days or []) if entry["date"] == key), None)
         picked, spent = [], 0
@@ -922,12 +934,12 @@ def study_plan_goal_view(data, student, courses, moment=None):
                     if plan["start"] <= today.isoformat() <= plan["end"]), None)
     if current is None:
         current = weeks[0] if weeks else None
+    tasks = plan_today_cards(workload["items"], parsed, data, student, saved, today, days)
     week_days = plan_week_calendar(current, days, parsed, data, student, saved) if current else []
     progress = plan_week_progress(week_days, today)
     # 周级统计按「实际摊到日期的卡片」聚合，复习才不会被漏算
     week_items = {plan["index"]: [item for entry in days if entry["week"] == plan["index"]
                                   for item in entry["items"]] for plan in weeks}
-    tasks = plan_today_cards(workload["items"], parsed, data, student, saved, today, days)
     return {"goal": {"text": goal.get("text"), "parsed": parsed,
                      "created_at": goal.get("created_at")},
             "workload": {"minutes": workload["minutes"], "by_kind": workload["by_kind"],
@@ -3676,6 +3688,27 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                  if not parsed.get("course_ids") or course["id"] in parsed["course_ids"]]
         return scope or list(courses)
 
+    def apply_plan_budget(parsed, payload):
+        """Use the same budget for the preview and the saved plan."""
+        for key, low, high, label in (("weeks", 1, PLAN_MAX_WEEKS, "周期（周）"),
+                                      ("weekly_minutes", PLAN_MIN_WEEKLY_MINUTES,
+                                       PLAN_MAX_WEEKLY_MINUTES, "每周可投入（分钟）"),
+                                      ("allowed_days", 1, 7, "每周可学习天数")):
+            if key not in payload:
+                continue
+            try:
+                value = int(payload[key])
+            except (TypeError, ValueError, OverflowError):
+                raise HTTPException(400, f"{label}需为整数") from None
+            if not low <= value <= high:
+                raise HTTPException(400, f"{label}需在 {low} 到 {high} 之间")
+            parsed[key] = value
+        parsed["allowed_weekdays"] = plan_weekdays_for(parsed["allowed_days"])
+        parsed["daily_capacity"] = int(min(parsed["weekly_minutes"] / parsed["allowed_days"],
+                                          PLAN_DAILY_CAP_MINUTES))
+        parsed["deadline"] = (local_day(parsed["start"]) + timedelta(days=parsed["weeks"] * 7)).isoformat()
+        return parsed
+
     @app.post("/api/student/plan/parse")
     async def parse_student_plan_goal(request: Request):
         """把一句话解析成目标并给出工作量诊断，不落库。"""
@@ -3688,7 +3721,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         with store.lock:
             courses = [course for course in store.data.get("courses") or []
                        if accepts_student(course, student)]
-            parsed = parse_plan_text(text, courses)
+            parsed = apply_plan_budget(parse_plan_text(text, courses), payload)
             scope = plan_scope_courses(courses, parsed)
             workload = estimate_plan_workload(store.data, student, scope)
             verdict = plan_verdict(workload["minutes"], parsed["weekly_minutes"], parsed["weeks"])
@@ -3711,26 +3744,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         with store.lock:
             courses = [course for course in store.data.get("courses") or []
                        if accepts_student(course, student)]
-            parsed = parse_plan_text(text, courses)
-            # 确认卡允许改期限、每周预算与可学天数，但必须落在有效区间
-            for key, low, high, label in (("weeks", 1, PLAN_MAX_WEEKS, "周期（周）"),
-                                          ("weekly_minutes", PLAN_MIN_WEEKLY_MINUTES,
-                                           PLAN_MAX_WEEKLY_MINUTES, "每周可投入（分钟）"),
-                                          ("allowed_days", 1, 7, "每周可学习天数")):
-                if key not in payload:
-                    continue
-                try:
-                    value = int(payload[key])
-                except (TypeError, ValueError):
-                    raise HTTPException(400, f"{label}需为整数")
-                if not low <= value <= high:
-                    raise HTTPException(400, f"{label}需在 {low} 到 {high} 之间")
-                parsed[key] = value
-            parsed["allowed_weekdays"] = plan_weekdays_for(parsed["allowed_days"])
-            parsed["daily_capacity"] = int(min(parsed["weekly_minutes"] / parsed["allowed_days"],
-                                              PLAN_DAILY_CAP_MINUTES))
-            parsed["deadline"] = (local_day(parsed["start"])
-                                  + timedelta(days=parsed["weeks"] * 7)).isoformat()
+            parsed = apply_plan_budget(parse_plan_text(text, courses), payload)
             plans = store.data.setdefault("study_plans", {})
             entry = plans.setdefault(student["id"], {})
             entry["goal"] = {"text": text, "parsed": parsed, "created_at": LearningStore.now()}

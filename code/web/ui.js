@@ -23,8 +23,8 @@ export const progressBar = (rate, label) => {
   return `<progress class="plan-progress" max="100" value="${percent}" aria-label="${esc(label || `已完成 ${percent}%`)}"></progress>`;
 };
 export const assignmentSubmissionText = item => item.attempts
-  ? `本作业已提交 ${item.attempts} / ${item.max_attempts} 次`
-  : `本作业尚未提交 · 最多 ${item.max_attempts} 次`;
+  ? `已提交 ${item.attempts} / ${item.max_attempts} 次`
+  : `未提交 · 最多 ${item.max_attempts} 次`;
 
 export const stateTag = student => student.not_started ? '<span class="tag neutral">待开始</span>'
   : student.needs_attention ? '<span class="tag attention">需关注</span>' : '<span class="tag published">正常</span>';

@@ -11,31 +11,30 @@
   <link rel="stylesheet" href="/static/focus.css">
   <link rel="stylesheet" href="/static/profile-insights.css">
   <link rel="stylesheet" href="/static/knowledge-graph.css">
-  <link rel="stylesheet" href="/static/compact.css">
+  <link rel="stylesheet" href="/static/learning-plan.css">
   <script src="/static/app.js" type="module"></script>
 </head>
 <body>
   <div id="platform"></div>
   <template id="video-template">
   <main>
-    <section class="intro"><div class="eyebrow">VIDEO → LEARNING MATERIALS</div><h1>把一段课程，<br>变成随时翻阅的资料。</h1><p>选择课程视频，自动整理课件页面与音频。<br class="mobile-break">提取后可生成课程总结，或将录音转为文字。</p><div class="intro-tags"><span>本地提取</span><span>可选 AI 总结</span><span>录音转文字</span></div></section>
+    <section class="intro"><h1>视频学习</h1><p>提取课件与音频，生成文字稿、课程总结和自测题。</p></section>
     <section class="workspace">
       <div class="panel upload-panel">
-        <div class="section-heading"><span class="step-number">01</span><div><h2>选择课程视频</h2><p>适合课件为主、画面相对稳定的课程录屏</p></div></div>
+        <div class="section-heading"><h2>选择课程视频</h2></div>
         <label id="dropzone" class="dropzone" tabindex="0" role="button" aria-label="选择视频文件">
           <input id="file" type="file" accept="video/*,.mkv,.ts,.mts,.m4v" hidden>
           <span class="upload-symbol" aria-hidden="true">↑</span>
           <strong id="file-title">点击选择，或将视频拖到这里</strong>
           <span id="file-detail">MP4 / MOV / MKV / AVI / WebM · 最大 8 GB</span>
-          <span class="select-link">打开文件管理器 ↗</span>
         </label>
         <div class="settings"><label for="profile">页面提取模式</label><select id="profile"><option value="balanced">均衡 · 推荐用于普通课程</option><option value="detailed">细致 · 保留更多局部内容变化</option><option value="compact">精简 · 减少相似页面</option></select><p id="profile-help">每秒检查 5 帧，等待画面稳定后保留页面，并去除重复内容。</p></div>
         <button class="button primary" id="start" disabled>确认视频并开始整理 <span>→</span></button>
         <p class="local-note">视频在本机提取。生成总结会将截图发送给 DeepSeek；录音转文字会将音频发送给讯飞。</p>
       </div>
       <div class="panel status-panel">
-        <div class="section-heading"><span class="step-number">02</span><div><h2>整理与导出</h2><p>从视频到可保存的学习资料</p></div></div>
-        <div id="idle" class="idle-state"><div class="page-stack"><span></span><span></span><span>PDF<br><small>课程资料</small></span></div><h3>等你放入第一段视频</h3><p>提取清晰页面，按出现顺序合成 PDF，<br>再将音频单独保存为 MP3。</p></div>
+        <div class="section-heading"><h2>整理与导出</h2></div>
+        <div id="idle" class="idle-state"><div class="page-stack" aria-hidden="true"><span></span><span></span><span>PDF</span></div><h3>等待处理视频</h3></div>
         <div id="processing" hidden aria-live="polite"><div class="processing-top"><span id="state-label">正在处理</span><strong id="percent">0%</strong></div><progress id="progress" max="100" value="0"></progress><p id="message">准备开始</p><ol class="stage-list"><li data-stage="uploading">视频传入本机</li><li data-stage="scanning">识别稳定画面</li><li data-stage="extracting">导出 JPG 与 PDF</li><li data-stage="audio">单独提取音频</li></ol><button class="button secondary" id="cancel">取消当前任务</button></div>
         <div id="result" hidden aria-live="polite">
           <div class="success-icon">✓</div><h3>学习资料已就绪</h3><p id="result-meta"></p><div id="warnings"></div>

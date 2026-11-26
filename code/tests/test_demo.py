@@ -1021,10 +1021,16 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(preview["parsed"]["weekly_minutes"], 300)
         self.assertIn(preview["verdict"]["verdict"], {"loose", "ok", "tight"})
         self.assertIsInstance(preview["workload"]["minutes"], int)
+        adjusted = {"text": text, "weeks": 5, "weekly_minutes": 330, "allowed_days": 5}
+        preview = call("/api/student/plan/parse", adjusted)
+        self.assertEqual(preview["parsed"]["weeks"], 5)
+        self.assertEqual(preview["parsed"]["allowed_weekdays"], [0, 1, 2, 3, 4])
+        self.assertEqual(preview["verdict"]["budget"], 1650)
 
-        put = call("/api/student/plan/goal", {"text": text}, "PUT")
+        put = call("/api/student/plan/goal", adjusted, "PUT")
         plan = put["plan"]
         self.assertEqual(plan["goal"]["text"], text)
+        self.assertEqual(plan["goal"]["parsed"], preview["parsed"])
         self.assertTrue(plan["weeks"])
         first_ids = [card["id"] for card in plan["tasks"]["cards"]]
         self.assertEqual(plan["tasks"]["total"], len(first_ids))

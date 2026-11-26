@@ -38,13 +38,13 @@
   grid-template-columns:minmax(0,1fr) auto;
   align-items:baseline;
   gap:4px 12px;
-  padding:6px 0;
+  padding:8px 0;
   border-bottom:1px solid #e4ede6;
 }
-#platform .radar-metric dt { font-weight:650; }
+#platform .radar-metric dt { color:var(--metric-label-color); font-size:16px; font-weight:650; }
 #platform .radar-metric dd { margin:0; text-align:end; }
-#platform .radar-metric strong { color:#126953; font-variant-numeric:tabular-nums; }
-#platform .radar-metric small { display:block; color:#4e6f61; font-size:12px; }
+#platform .radar-metric strong { color:#126953; font-size:20px; font-variant-numeric:tabular-nums; }
+#platform .radar-metric small { display:block; color:#4e6f61; font-size:13px; }
 #platform .radar-missing { margin-top:12px; color:#4e6f61; font-size:13px; }
 #platform .radar-missing:first-child { margin-top:0; }
 #platform .radar-missing summary { cursor:pointer; padding:5px 0; }
@@ -67,6 +67,27 @@
   color:#4e6f61;
   font-size:12px;
 }
+
+#platform .portrait-card {
+  background:#fff;
+  padding:clamp(18px,3vw,32px);
+  border-color:var(--focus-line);
+  border-radius:var(--panel-radius);
+  margin-top:32px;
+}
+#platform .portrait-grid { grid-template-columns:repeat(auto-fit,minmax(min(100%,235px),1fr)); gap:14px }
+#platform .portrait-dim { background:#f7faf6; border-color:var(--focus-line); gap:6px; padding:16px }
+#platform .portrait-dim h3 { font-size:16px; color:var(--metric-label-color); margin:0 }
+#platform .portrait-dim strong { font-size:24px; color:var(--accent); line-height:1.35; overflow-wrap:anywhere }
+#platform .portrait-dim p { font-size:14px; color:var(--muted) }
+#platform .portrait-details { margin-top:20px }
+#platform .portrait-details .portrait-section { margin:0; padding:0; border-top:1px solid var(--focus-line) }
+#platform .portrait-section-content { padding:0 0 16px }
+#platform .portrait-section-content .investment-row b { color:var(--metric-label-color) }
+#platform .portrait-section-content .investment-track::-webkit-progress-value { background:var(--accent) }
+#platform .portrait-section-content .investment-track::-moz-progress-bar { background:var(--accent) }
+#platform .portrait-section .point-row { font-size:14px }
+#platform .portrait-section .point-row.is-due { background:#fff9ec }
 
 @media (max-width:760px) {
   #platform .radar-card { grid-template-columns:minmax(0,1fr); gap:12px; }

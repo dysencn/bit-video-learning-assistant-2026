@@ -1,4 +1,4 @@
-import {esc} from "/static/ui.js";
+import {esc, icon} from "/static/ui.js";
 import {workspaceNav} from "/static/teacher-workspace.js";
 
 const options = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(
@@ -21,11 +21,16 @@ function showGraph(canvas, nodes, edges) {
     const brush = canvas.getContext("2d");
     if (!brush) return;
     brush.scale(ratio, ratio);
-    brush.strokeStyle = getComputedStyle(surface).getPropertyValue("--graph-edge");
-    brush.fillStyle = brush.strokeStyle;
-    brush.lineWidth = 1.6;
+    const palette = getComputedStyle(surface);
+    const edge = palette.getPropertyValue("--graph-edge");
+    const selectedEdge = palette.getPropertyValue("--graph-edge-active");
+    const active = surface.querySelector('[aria-pressed="true"]')?.dataset.graphPoint;
     const positions = new Map(nodes.map(node => [node.id, buttons.get(node.id).getBoundingClientRect()]));
     for (const {before, after} of edges) {
+      const selected = before === active || after === active;
+      brush.strokeStyle = selected ? selectedEdge : edge;
+      brush.fillStyle = brush.strokeStyle;
+      brush.lineWidth = selected ? 2.4 : 1.6;
       const from = positions.get(before), to = positions.get(after);
       const x1 = from.right - area.left, y1 = from.top + from.height / 2 - area.top;
       const x2 = to.left - area.left - 2, y2 = to.top + to.height / 2 - area.top;
@@ -45,7 +50,7 @@ function showGraph(canvas, nodes, edges) {
   const observer = new ResizeObserver(draw);
   observer.observe(surface);
   draw();
-  return observer;
+  return {draw, observer};
 }
 
 function graphColumns(nodes, edges) {
@@ -194,23 +199,25 @@ export async function knowledgeGraphPage(ctx, initialPoint) {
   let active = nodes.has(requested) ? requested : graph.nodes[0]?.id;
   const columns = graphColumns(graph.nodes, graph.prerequisites);
   layout(`${teacher ? workspaceNav(ctx, course, "knowledge-graph") : ""}
-    <div class="page-heading"><div><h1>学习顺序</h1><p class="muted">${esc(graph.title)}${graph.teaching_class ? ` · ${esc(graph.teaching_class)}` : ""}</p></div>
+    <div class="page-heading"><div><h1>学习顺序</h1>${teacher ? "" : `<p class="muted">${esc(graph.title)}${graph.teaching_class ? ` · ${esc(graph.teaching_class)}` : ""}</p>`}</div>
     <div class="actions">${teacher ? "" : link("course", "返回课程", "secondary", {course:courseId})}
-    <button id="refresh-graph" class="ghost" type="button">刷新学习顺序</button></div></div>
-    ${columns.length ? `<div class="graph-workspace"><section class="editor"><h2>知识点与学习顺序</h2>
-      <p class="muted">${graph.prerequisites.length ? "箭头从先修知识点指向后续知识点。" : "本班暂无已确认的先修关系。"}</p>
+    <button id="refresh-graph" class="ghost" type="button">${icon("refresh")}刷新</button></div></div>
+    ${columns.length ? `<div class="graph-workspace"><section class="editor"><div class="section-title"><h2>知识点</h2><span class="tag neutral">${graph.prerequisites.length ? `${icon("arrow")}先修关系` : "暂无先修关系"}</span></div>
       <div class="graph-scroll"><div class="graph-surface"><canvas aria-hidden="true"></canvas>
         ${columns.map(column => `<div class="graph-column">${column.map(node =>
           `<button type="button" class="graph-point" data-graph-point="${esc(node.id)}" aria-pressed="false">${esc(node.name)}</button>`
         ).join("")}</div>`).join("")}</div></div></section><section class="editor graph-details" id="graph-point-details" aria-live="polite"></section></div>`
       : `<div class="empty-state"><h2>本班暂无知识点</h2>${graph.editable ? link("edit-course", "在课程题库添加知识点", "secondary", {course:courseId, section:"questions"}) : ""}</div>`}
     ${graph.editable && columns.length ? '<section class="editor" id="graph-editor"></section>' : ""}`, "学习顺序");
+  const canvas = root.querySelector(".graph-surface canvas");
+  const drawing = canvas ? showGraph(canvas, graph.nodes, graph.prerequisites) : null;
   const renderPoint = id => {
     active = id;
     const point = nodes.get(id);
     for (const button of root.querySelectorAll("[data-graph-point]")) {
       button.setAttribute("aria-pressed", String(button.dataset.graphPoint === id));
     }
+    drawing?.draw();
     const sources = point.evidence.map(source => {
       const label = sourceLabel(source);
       if (!source.available) return `<li>${label} <span class="muted">来源不可用</span></li>`;
@@ -229,8 +236,9 @@ export async function knowledgeGraphPage(ctx, initialPoint) {
     const announcement = teacher && course.status === "published"
       ? link("announcements", "发布知识点讲评", "secondary", {course:courseId, knowledge_point:point.name}) : "";
     root.querySelector("#graph-point-details").innerHTML = `<h2>${esc(point.name)}</h2>
-      ${earlier.length ? `<p>先学 ${esc(earlier.join("、"))}</p>` : ""}
-      ${later.length ? `<p>后续 ${esc(later.join("、"))}</p>` : ""}
+      ${earlier.length || later.length ? `<dl class="graph-sequence">
+        ${earlier.length ? `<div><dt>先修</dt><dd>${esc(earlier.join("、"))}</dd></div>` : ""}
+        ${later.length ? `<div><dt>后续</dt><dd>${esc(later.join("、"))}</dd></div>` : ""}</dl>` : ""}
       <dl class="graph-statistics">
         <div><dt>自主练习</dt><dd>${point.answered ? `${point.correct} / ${point.answered} 题答对 · ${point.accuracy}%` : "暂无作答"}</dd></div>
         <div><dt>复习次数</dt><dd>${point.review_count} 次${point.review_count ? ` · 答对 ${point.review_correct} 次` : ""}</dd></div>
@@ -246,11 +254,9 @@ export async function knowledgeGraphPage(ctx, initialPoint) {
       button.onclick = () => renderPoint(button.dataset.graphPoint);
     });
   }
-  const canvas = root.querySelector(".graph-surface canvas");
-  const observer = canvas ? showGraph(canvas, graph.nodes, graph.prerequisites) : null;
   const reload = async () => {
     await knowledgeGraphPage(ctx, active);
-    observer?.disconnect();
+    drawing?.observer.disconnect();
   };
   root.querySelector("#refresh-graph").onclick = () => reload().catch(error => tell(error.message));
   if (graph.editable && active) editor(ctx, graph, course, jobs, reload);

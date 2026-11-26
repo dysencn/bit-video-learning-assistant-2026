@@ -18,7 +18,7 @@ export async function teachingCoursesPage(ctx) {
   let state = {q:params.get("q") || "", status:states.includes(params.get("status")) ? params.get("status") : "all",
     major:majors.includes(params.get("major")) ? params.get("major") : "all", sort:params.get("sort") === "title" ? "title" : "updated", page:1};
   const stats = [[subjects.size,"门课程"],[activeCourses.length,"个教学班"],[allAssignments.filter(a => ["open","late"].includes(a.state)).length,"份进行中作业"],[allAssignments.filter(a => a.status === "draft").length,"份作业草稿"]];
-  layout(`<div class="page-heading catalog-heading"><div><span class="eyebrow">COURSES & TEACHING CLASSES</span><h1>课程与作业</h1></div><div class="actions"><button class="ghost" id="catalog-refresh">${icon("refresh")}刷新</button>${link("new-course", `${icon("plus")}新建教学班`, "primary")}</div></div>
+  layout(`<div class="page-heading catalog-heading"><div><h1>课程与作业</h1></div><div class="actions"><button class="ghost" id="catalog-refresh">${icon("refresh")}刷新</button>${link("new-course", `${icon("plus")}新建教学班`, "primary")}</div></div>
     <div class="catalog-stats">${stats.map(([n,label]) => `<div><b>${n}</b><span>${label}</span></div>`).join("")}</div>
     <div class="catalog-toolbar"><label class="catalog-search">${icon("target")}<span class="sr-only">搜索课程或教学班</span><input id="catalog-search" type="search" value="${esc(state.q)}" placeholder="搜索课程、课程代码或教学班"></label><label>教学班状态<select id="catalog-status">${states.map(value => `<option value="${value}" ${value === state.status ? "selected" : ""}>${value === "all" ? "全部在教" : statusName(value)}</option>`).join("")}</select></label><label>学生专业<select id="catalog-major"><option value="all">全部专业</option>${majors.map(id => `<option value="${esc(id)}" ${state.major === id ? "selected" : ""}>${esc(majorName(id))}</option>`).join("")}</select></label><label>排序<select id="catalog-sort"><option value="updated" ${state.sort === "updated" ? "selected" : ""}>最近更新</option><option value="title" ${state.sort === "title" ? "selected" : ""}>课程名称</option></select></label></div>
     <div class="section-title catalog-result-heading"><span class="muted" id="catalog-result-count" role="status"></span><button class="ghost small" id="catalog-clear">清除筛选</button></div><div id="catalog-results" class="subject-grid"></div><div id="catalog-pagination" class="catalog-pagination"></div>
@@ -31,7 +31,7 @@ export async function teachingCoursesPage(ctx) {
     const grouped = new Map();
     for (const course of filtered) {
       const id = key(course);
-      if (!grouped.has(id)) grouped.set(id, {title:course.title, code:course.course_code || "", description:course.description, courses:[]});
+      if (!grouped.has(id)) grouped.set(id, {title:course.title, code:course.course_code || "", courses:[]});
       grouped.get(id).courses.push(course);
     }
     const groups = [...grouped.values()];

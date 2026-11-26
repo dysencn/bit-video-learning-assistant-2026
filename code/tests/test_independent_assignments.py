@@ -82,6 +82,7 @@ class IndependentAssignmentTests(unittest.TestCase):
 
     def test_only_scores_until_last_attempt_across_all_student_routes(self):
         paper=self.paper(3);endpoint=f"/api/assignments/{paper['id']}"
+        goal = {"text": "4 周内复习 Python，每周投入 3 小时"}
         for number in (1,2):
             result=self.submit(paper)
             self.assertEqual(result['score'],0);self.assertEqual(result['details'],[])
@@ -90,6 +91,8 @@ class IndependentAssignmentTests(unittest.TestCase):
             self.assertEqual(detail['attempts'],number)
             self.assertNotIn('answer',detail['questions'][0]);self.assertNotIn('explanation',detail['questions'][0])
             self.assertFalse(self.req('/api/wrong-questions',account=STUDENT))
+            preview = self.req('/api/student/plan/parse', goal, STUDENT)
+            self.assertEqual(preview["workload"]["counts"].get("review", 0), 0)
             wrong = next(w for w in self.app.state.learning.data['wrong_questions'] if w.get('assignment_id') == paper['id'])
             self.error(409,f"/api/wrong-questions/{wrong['id']}/review",{'selected':1},STUDENT)
             self.error(409,f"/api/wrong-questions/{wrong['id']}/mastered",{},STUDENT)
@@ -104,6 +107,8 @@ class IndependentAssignmentTests(unittest.TestCase):
         self.assertIn('作业私有解析',last['details'][0]['explanation'])
         self.assertEqual(self.req(endpoint,account=STUDENT)['assignment']['questions'][0]['answer'],1)
         self.assertTrue(self.req('/api/wrong-questions',account=STUDENT))
+        preview = self.req('/api/student/plan/parse', goal, STUDENT)
+        self.assertEqual(preview["workload"]["counts"]["review"], 1)
         self.assertTrue(all(r['details'] for r in self.req('/api/learning-records?source=assignment',account=STUDENT)))
         self.assertEqual(self.req(f"/api/learning-records/{last['id']}/analysis",account=STUDENT)['status'],'idle')
         self.assertTrue(self.req(endpoint,account=OTHER)['assignment']['answers_locked'])

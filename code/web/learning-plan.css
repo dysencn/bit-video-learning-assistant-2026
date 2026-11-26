@@ -1,0 +1,92 @@
+#platform :is(.plan-card,.plan-board) {
+  padding:24px 28px;
+  border-color:var(--focus-line);
+  border-radius:var(--panel-radius);
+  box-shadow:0 4px 16px #1b433207;
+}
+#platform .plan-section-head {
+  display:flex;
+  justify-content:space-between;
+  align-items:flex-start;
+  flex-wrap:wrap;
+  gap:12px 20px;
+  margin-bottom:16px;
+}
+#platform .plan-section-head h2,#platform .plan-section-head h3 { margin:0 }
+#platform .plan-section-head p { color:var(--muted); margin-top:6px; overflow-wrap:anywhere }
+#platform .plan-section-head .plan-goal-text { font-size:17px; color:var(--ink) }
+#platform .plan-next { display:flex; align-items:baseline; gap:8px 12px; flex-wrap:wrap }
+#platform .plan-next strong { color:var(--ink); font-size:17px }
+#platform .plan-progress-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px }
+#platform .plan-goal-head { gap:6px 14px; flex-wrap:wrap }
+#platform .plan-goal-head b { color:var(--accent); font-variant-numeric:tabular-nums }
+#platform .plan-progress { display:block; height:9px }
+#platform .plan-facts {
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(min(100%,130px),1fr));
+  gap:10px;
+  margin:14px 0;
+}
+#platform .plan-facts>div { padding:12px 14px; border-radius:10px; background:#f4f8f3 }
+#platform .plan-facts dt { font-size:14px; color:var(--metric-label-color); font-weight:600 }
+#platform .plan-facts dd { margin:4px 0 0; font-size:17px; font-weight:700; color:var(--accent) }
+#platform .plan-goal-form { border:0; padding:0; margin:0 0 12px }
+#platform .plan-goal-form label { margin-top:0; font-size:15px }
+#platform .plan-verdict { font-size:14px; line-height:1.6 }
+#platform .plan-goal-preview { padding:18px; background:#fbfdfb }
+#platform .plan-budget {
+  display:grid;
+  grid-template-columns:repeat(3,minmax(0,1fr)) auto;
+  align-items:end;
+  gap:12px;
+}
+#platform .plan-task-list { margin:18px 0 0 }
+#platform .plan-task {
+  grid-template-columns:auto minmax(0,1fr) auto;
+  gap:12px;
+  padding:12px 14px;
+  border-radius:12px;
+  min-width:0;
+}
+#platform .plan-task-icon { display:grid; place-items:center; width:36px; height:36px; background:#edf5ee; color:var(--accent); border-radius:10px }
+#platform .plan-task .plan-task-title { font-size:16px; font-weight:650; text-decoration:none }
+#platform .plan-task small { display:block; font-size:13px }
+#platform .plan-task-state .tag .ui-icon { width:15px; height:15px; margin-right:4px }
+#platform .plan-kind-list { display:flex; flex-wrap:wrap; gap:8px; margin:18px 0 0; padding:0; list-style:none }
+#platform .plan-kind-list li { padding:5px 10px; border-radius:8px; background:#f2f6f0; color:var(--metric-label-color) }
+#platform .plan-day-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(132px,1fr)); list-style:none; padding:0; margin:2px 0 14px }
+#platform .plan-day { padding:11px 12px; font-size:14px }
+#platform .plan-day b { font-size:16px }
+#platform .plan-day.is-rest { opacity:1; background:#f5f6f2 }
+#platform .plan-day small { color:var(--muted); line-height:1.4 }
+#platform .checkin-grid { padding:0; list-style:none }
+#platform .checkin-cell { min-height:51px; color:var(--accent) }
+#platform .checkin-cell span,#platform .checkin-cell i { font-size:13px }
+#platform .checkin-cell .ui-icon { width:16px; height:16px }
+#platform .checkin-legend { flex-wrap:wrap; gap:6px 16px; color:var(--metric-label-color); font-size:13px }
+#platform .checkin-legend i { display:inline-grid; place-items:center; width:16px; height:16px }
+#platform .checkin-legend .ui-icon { width:13px; height:13px }
+#platform :is(.checkin-cell,.checkin-legend i).is-done { background:#e3f3e8; border-color:#a8cdb6; color:var(--accent) }
+#platform :is(.checkin-cell,.checkin-legend i).is-partial { background:#fcf2df; border-color:#e6cfa2 }
+#platform :is(.checkin-cell,.checkin-legend i).is-outside { background:#eaf0f3; border-color:#d8e3e9 }
+#platform .plan-streak { text-align:end; justify-items:end }
+#platform .plan-streak b small { font-size:16px; color:inherit }
+#platform .plan-streak>small { font-size:13px }
+#platform .achievement { opacity:1; background:#f8faf7 }
+#platform .achievement.is-unlocked { background:#eaf5ee }
+#platform .achievement b { font-size:15px }
+#platform .achievement small { font-size:13px }
+
+@media (max-width:850px) {
+  #platform .plan-budget { grid-template-columns:repeat(2,minmax(0,1fr)) }
+}
+@media (max-width:620px) {
+  #platform :is(.plan-card,.plan-board) { padding:18px }
+  #platform .plan-progress-grid { grid-template-columns:1fr; gap:14px }
+  #platform .plan-task { grid-template-columns:auto minmax(0,1fr); gap:8px 10px }
+  #platform .plan-task-state { grid-column:2; justify-self:start }
+  #platform .plan-streak b { font-size:29px }
+  #platform .checkin-cell { min-height:42px }
+  #platform .checkin-cell span,#platform .checkin-cell i { font-size:11px }
+  #platform .plan-budget { grid-template-columns:minmax(0,1fr) }
+}

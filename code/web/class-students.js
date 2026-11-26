@@ -11,7 +11,7 @@ export async function classStudentsPage(ctx) {
   let selected = new Set(data.student_ids);
   let search = "", filter = "all", saving = false;
   layout(`${workspaceNav(ctx, course, "students")}
-    <div class="page-heading"><div><span class="eyebrow">CLASS ROSTER</span><h1>班级学生</h1><p class="muted">仅名单内学生可进入本班。移出学生会保留其历史作答。</p></div>${link("course", "预览学生页面", "secondary", {course:course.id, preview:"1"})}</div>
+    <div class="page-heading"><div><h1>班级学生</h1><p class="muted">移出学生后，历史作答仍可查看。</p></div>${link("course", "预览学生页面", "secondary", {course:course.id, preview:"1"})}</div>
     <div class="catalog-stats roster-stats"><div><b id="roster-saved-count">${data.student_count}</b><span>本班学生</span></div><div><b id="roster-selected-count">${selected.size}</b><span>当前选择</span></div><div><b>${esc(majorName(course.major_ids[0]))}</b><span>学生专业</span></div></div>
     <section class="roster-panel"><div class="roster-toolbar"><label class="roster-search"><span class="sr-only">搜索学生</span><input id="roster-search" type="search" placeholder="搜索姓名或账号"></label><label><span class="sr-only">学生范围</span><select id="roster-filter"><option value="all">全部同专业学生</option><option value="enrolled">本班学生</option><option value="available">可加入学生</option><option value="other">已在其他班</option></select></label><button class="secondary" id="roster-select">全选可加入</button><button class="ghost" id="roster-clear">清空选择</button></div>
     <div class="table-scroll"><table class="roster-table"><thead><tr><th>加入本班</th><th>学生</th><th>账号</th><th>分班状态</th></tr></thead><tbody id="roster-rows"></tbody></table></div><div id="roster-error" class="roster-error" role="alert" hidden></div></section>
@@ -40,8 +40,11 @@ export async function classStudentsPage(ctx) {
       return `<tr class="${selected.has(student.id) ? "roster-enrolled" : ""}"><td><input type="checkbox" data-roster-student="${esc(student.id)}" aria-label="将${esc(student.name)}加入本班" ${selected.has(student.id) ? "checked" : ""} ${saving || !canAdd(student) ? "disabled" : ""}></td><td><div class="roster-person"><span class="avatar small">${esc(student.name.slice(0,1))}</span><strong>${esc(student.name)}</strong></div></td><td><code>${esc(student.username)}</code></td><td>${selected.has(student.id) ? '<span class="tag published">本班</span>' : other ? `<span class="tag neutral">已在其他班</span><small>${esc(other)}</small>` : '<span class="tag neutral">可加入</span>'}</td></tr>`;
     }).join("") || '<tr><td colspan="4"><div class="empty">没有符合条件的学生</div></td></tr>';
     root.querySelectorAll("[data-roster-student]").forEach(input => { input.onchange = () => {
-      if (input.checked) selected.add(input.dataset.rosterStudent); else selected.delete(input.dataset.rosterStudent);
+      const id = input.dataset.rosterStudent;
+      if (input.checked) selected.add(id); else selected.delete(id);
       render();
+      const target = root.querySelector(`[data-roster-student="${CSS.escape(id)}"]`) || root.querySelector("#roster-filter");
+      target.focus({preventScroll:true});
     }; });
     root.querySelector("#roster-select").disabled = saving;
     root.querySelector("#roster-clear").disabled = saving;

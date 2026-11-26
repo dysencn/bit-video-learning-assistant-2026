@@ -1,15 +1,18 @@
 /* Clear hierarchy, legible controls and explicit teaching-class membership. */
 #platform {
-  --accent:#146c53; --focus-line:#dce7e1;
+  --accent:#146c53; --focus-line:#dce7e1; --line:var(--focus-line);
+  --ink:#193c31; --muted:#5d7569; --soft:#edf5ef; --panel-radius:18px;
   --metric-label-size:18px; --metric-label-color:#38574a;
-  background:#f3f6f5; font-size:15px; color:#193c31;
+  background:#f4f6f3; font-size:15px; color:var(--ink);
 }
 #platform .shell { max-width:1360px; padding:32px 36px }
 #platform h1,#platform .catalog-heading h1 { font-size:38px; line-height:1.3; letter-spacing:-.8px }
 #platform h2,#platform .section-title h2 { font-size:25px; line-height:1.4 }
 #platform h3 { line-height:1.5 }
 #platform .eyebrow { font-size:11px; letter-spacing:1.6px; color:#658479 }
-#platform .muted { color:#657b71 }
+#platform .muted { color:var(--muted) }
+#platform :is(.page-heading>div,.course-content,.analysis-head>div,.teaching-context>b) { min-width:0; overflow-wrap:anywhere }
+#platform .page-heading .actions { margin-top:0 }
 #platform .primary,#platform .secondary,#platform .ghost,
 #platform .teaching-class-card .actions>a,#platform .add-teaching-class {
   min-height:46px; padding:11px 18px; font-size:15px; font-weight:650; border-radius:11px;
@@ -29,18 +32,21 @@
 #platform .option:has(input:checked) { background:#e9f5ee; border-color:#4f9a79 }
 #platform .question legend { font-size:18px; line-height:1.65; font-weight:650 }
 #platform .question { padding:22px; border-radius:14px }
-#platform .nav { padding:16px 28px; gap:16px }
-#platform .nav-link { font-size:15px; min-height:46px; padding:10px 12px; border-radius:10px }
+#platform .nav { padding:14px 28px; gap:16px; border-bottom:1px solid var(--focus-line); box-shadow:0 3px 18px #193c3108 }
+#platform .nav-link { font-size:15px; min-height:46px; padding:10px 13px; border-radius:10px; color:#435e52 }
+#platform .nav-link.active { background:#e8f2eb; color:#125a44 }
+#platform :is(.teaching-tabs a,.learning-file-tabs button,.review-tabs button) { color:#496458 }
+#platform :is(.learning-file-tabs button,.review-tabs button) span { color:#496458 }
 #platform .nav-link .ui-icon { width:20px; height:20px }
 #platform .nav-account .identity { font-size:14px }
 #platform .identity small { font-size:12px }
 #platform #logout { font-size:13px; padding:8px 12px; min-height:40px }
 #platform .nav-bell { width:44px; height:44px }
 #platform .demo-banner { display:inline-flex; font-size:12px; background:#fff8e9; padding:5px 10px; border-radius:20px; margin-bottom:18px }
-#platform .hero.dashboard-hero { min-height:180px; padding:28px 34px; background:linear-gradient(110deg,#e4f1e9,#f0f7f2); border-color:#d1e4d8 }
+#platform .hero.dashboard-hero { min-height:180px; padding:30px 36px; background:linear-gradient(110deg,#e6f2e9 12%,#f3f8ef 100%); border-color:#d7e6da }
 #platform .dashboard-hero h1 { font-size:34px }
 #platform .dashboard-hero .muted { font-size:15px }
-#platform .hero-art { height:140px; transform:scale(.85) }
+#platform .hero-art { height:140px; transform:scale(.85); color:#317455 }
 #platform .dashboard-stats,#platform .catalog-stats { border-radius:18px; border-color:var(--focus-line); padding:24px 8px; box-shadow:0 6px 24px #1b433209; margin:24px 0 32px }
 #platform :is(.dashboard-stats,.catalog-stats)>div { display:flex; flex-direction:column; align-items:flex-start; padding:4px 18px; gap:10px; text-align:left }
 #platform :is(.dashboard-stats,.catalog-stats)>div>b,#platform .analytics-card>b { font-size:38px; color:var(--accent); line-height:1.15; font-weight:750; font-variant-numeric:tabular-nums }
@@ -54,14 +60,18 @@
 #platform .live-ticket>div { gap:10px; min-width:0 }
 #platform .live-ticket>div>span { font-size:var(--metric-label-size); font-weight:650; line-height:1.5; color:var(--metric-label-color) }
 #platform .live-ticket b { font-size:32px; line-height:1.25; overflow-wrap:anywhere }
-#platform .analytics-card { padding:25px; border-radius:16px }
+#platform .analytics-card { padding:25px; border-radius:var(--panel-radius); border-color:var(--focus-line); box-shadow:0 4px 16px #1b433207 }
 #platform .analytics-grid { align-items:stretch }
-#platform .analytics-card>.stat-icon { margin-top:0 }
+#platform .analytics-card>.stat-icon {
+  display:inline-grid; place-items:center; width:34px; height:34px;
+  margin-top:0; margin-bottom:12px; color:#42765e; background:#edf5ee; border-radius:10px;
+}
 #platform .analysis-head>strong { font-size:32px }
 #platform .analysis-head>strong small,#platform .score small {
   font-size:16px; line-height:1.5; font-weight:600; color:var(--metric-label-color); margin-top:7px;
 }
 #platform .analysis-head>div>small { font-size:15px; line-height:1.6; color:#4d685b }
+#platform .analytics-grid.gradebook-summary { grid-template-columns:repeat(5,minmax(0,1fr)) }
 #platform .radar { max-width:360px }
 #platform .radar text { font-size:17px; fill:var(--metric-label-color); font-weight:600 }
 #platform .radar text .radar-value { font-size:18px; fill:var(--accent); font-weight:700 }
@@ -143,7 +153,35 @@
 #platform .plan-goal small { font-size:13px }
 #platform .calendar-day { min-height:78px; padding:10px 6px; border-radius:12px }
 #platform .calendar-day b { font-size:19px }
-#platform .calendar-week,#platform .calendar-day small { font-size:12px }
+#platform .calendar-week,#platform .calendar-day small { font-size:13px; opacity:1 }
+#platform .calendar-strip { padding:0; list-style:none }
+#platform .calendar-strip li { min-width:0 }
+#platform .calendar-day { width:100%; height:100%; font-variant-numeric:tabular-nums }
+#platform .calendar-day.is-active { box-shadow:inset 0 0 0 2px #ffffff95 }
+#platform .review-calendar { background:#fff; border:1px solid var(--focus-line); border-radius:var(--panel-radius); padding:22px }
+#platform .task-meta { display:flex; flex-wrap:wrap; align-items:baseline; gap:5px 16px; color:var(--muted); font-size:15px; margin:8px 0 0 }
+#platform .task-meta b { color:var(--metric-label-color); font-weight:700 }
+#platform .assignment-card>.actions { margin-top:auto; padding-top:14px }
+#platform .assignment-card { display:flex; flex-direction:column; min-width:0 }
+#platform .section-title .text-link { font-size:15px; padding-block:8px; white-space:nowrap }
+#platform .section-disclosure { border-top:1px solid var(--focus-line); margin-top:16px }
+#platform .section-disclosure>summary {
+  list-style:none; display:flex; align-items:center; gap:10px; min-height:48px;
+  padding:12px 0; cursor:pointer; font-size:16px; font-weight:650; color:var(--ink);
+}
+#platform .section-disclosure>summary::-webkit-details-marker { display:none }
+#platform .section-disclosure>summary::after {
+  content:""; flex:none; margin-inline-start:auto; margin-inline-end:4px; width:8px; height:8px;
+  border:solid currentColor; border-width:0 1.75px 1.75px 0; transform:rotate(45deg);
+}
+#platform .section-disclosure[open]>summary::after { transform:rotate(225deg) }
+#platform .section-disclosure>summary:hover { color:var(--accent) }
+#platform .section-disclosure>p { margin:0 0 12px }
+#platform .review-filters { align-items:flex-end }
+#platform .auth-grid>* { min-width:0 }
+#platform .demo-panel .table-scroll { max-width:100% }
+#platform .demo-panel .fill-account { font-size:14px; min-height:40px }
+#platform .demo-panel :is(td,th,code) { font-size:14px }
 #platform .platform-footer { padding-top:26px; margin-top:34px; font-size:12px }
 #platform .roster-stats { grid-template-columns:repeat(3,minmax(0,1fr)) }
 #platform .roster-stats>div:last-child>b { font-size:25px }
@@ -170,7 +208,10 @@
 @media(max-width:1200px) {
   #platform .nav { flex-wrap:wrap }
   #platform .nav-account { margin-left:auto }
-  #platform .nav-links { order:3; width:100%; flex:auto; justify-content:flex-start; overflow-x:auto; gap:6px; padding-bottom:2px }
+  #platform .nav-links { order:3; width:100%; flex:auto; justify-content:flex-start; overflow-x:auto; gap:6px; padding:4px 3px 6px }
+}
+@media(max-width:850px) {
+  #platform .analytics-grid.gradebook-summary { grid-template-columns:repeat(3,minmax(0,1fr)) }
 }
 @media(max-width:700px) {
   #platform { --metric-label-size:16px }
@@ -181,14 +222,26 @@
   #platform .dashboard-hero h1 { font-size:27px }
   #platform .dashboard-stats,#platform .catalog-stats { grid-template-columns:repeat(2,minmax(0,1fr)); row-gap:22px; padding:20px 6px }
   #platform :is(.dashboard-stats,.catalog-stats)>div>b,#platform .analytics-card>b { font-size:32px }
+  #platform .analytics-grid.gradebook-summary { grid-template-columns:repeat(2,minmax(0,1fr)) }
   #platform .nav { padding:12px 16px; gap:10px }
   #platform .nav-link { font-size:14px; padding:10px }
+  #platform .auth-grid { grid-template-columns:minmax(0,1fr) }
   #platform .subject-card,#platform .roster-panel { padding:16px }
   #platform .catalog-toolbar { grid-template-columns:repeat(2,minmax(0,1fr)) }
   #platform .subject-heading h2 { font-size:21px }
   #platform .class-heading h3 { font-size:18px }
-  #platform .learning-file-tabs { display:flex; width:100%; overflow-x:auto }
-  #platform .learning-file-tabs button,#platform .review-tabs button { font-size:14px; padding:11px 13px; flex:none }
+  #platform .learning-file-tabs { display:grid; width:100%; grid-template-columns:repeat(2,minmax(0,1fr)) }
+  #platform .learning-file-tabs button,#platform .review-tabs button { font-size:14px; padding:10px 9px }
+  #platform .learning-file-tabs button { justify-content:center; flex-wrap:wrap }
+  #platform .learning-file-tabs button .ui-icon { width:16px; height:16px }
+  #platform .review-calendar { padding:16px }
+  #platform .calendar-strip { gap:5px }
+  #platform .calendar-day { min-height:67px; padding:8px 1px }
+  #platform .calendar-day b { font-size:16px }
+  #platform .calendar-day .calendar-prefix { display:none }
+  #platform .calendar-week,#platform .calendar-day small { font-size:11px }
+  #platform .review-filters { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)) }
+  #platform .review-filters select { width:100%; max-width:none; padding:10px 22px 10px 9px }
   #platform .roster-stats>div:last-child { grid-column:1/-1 }
   #platform .roster-savebar { position:static; padding:16px; flex-wrap:wrap }
   #platform .roster-savebar>.actions { width:100%; justify-content:flex-end }
@@ -202,15 +255,6 @@
   #platform .roster-table td:nth-child(3)::before { content:"账号："; color:#708579; font-size:13px }
   #platform .roster-person { gap:8px }
 }
-#platform .learning-plan-details { border:1px solid var(--focus-line); border-radius:15px; background:#fff; margin:22px 0 }
-#platform .learning-plan-head { display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:18px 22px; font-size:16px; font-weight:650; color:#26583f; border-bottom:1px solid #e6eee8 }
-#platform .learning-plan-head .learning-plan-meta { color:#6c8275; font-size:14px; font-weight:400 }
-#platform .learning-plan-details>section { margin:0; border:0; border-radius:0; box-shadow:none; border-top:1px solid #e6eee8 }
-#platform .study-note.is-focus { box-shadow:inset 0 0 0 2px #146c53; background:#f2f9f4 }
-#platform .question.is-focus { border-color:#146c53; background:#f0f8f2 }
-#platform .checkin-cell.is-partial { border-color:#e2c58f; background:#fdf6e7 }
-#platform .plan-checkin-note { font-size:13px; margin-top:6px; color:#8a6a2a }
-#platform .plan-checkin-note.is-met { color:#146c53; font-weight:600 }
-#platform .checkin-cell.is-outside { border-color:#d3ddd6; background:#f4f6f2 }
-#platform .checkin-cell.is-outside i { color:#8b9a90 }
-#platform .checkin-legend i.is-outside { background:#f4f6f2; border-color:#d3ddd6 }
+#platform :is(.study-note,.question,.review-question).is-focus {
+  border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); background:#edf7f0;
+}

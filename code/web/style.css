@@ -357,3 +357,33 @@ body:has(#platform)>header,body:has(#platform)>main{display:none}#platform{min-h
 @media(max-width:850px){#platform .point-row{grid-template-columns:1fr 1fr;gap:6px}#platform .meta-week{grid-template-columns:1fr 52px}#platform .meta-week small{grid-column:1/-1}}
 @media(max-width:850px){.plan-card-head,.plan-board-head{flex-direction:column}.plan-goals,.plan-goals.wide{grid-template-columns:1fr}.checkin-grid{grid-template-columns:repeat(7,minmax(0,1fr))}.plan-streak{justify-items:start;text-align:left}}
 @media(max-width:850px){#platform .portrait-head{flex-direction:column}#platform .investment-row{grid-template-columns:1fr;gap:6px}#platform .investment-row small{grid-column:1/-1}#platform .investment-value{text-align:left}}
+
+#platform .plan-goal-plan{margin:18px 0;padding:18px;border:1px solid var(--line);border-radius:14px;background:#fbfcf8}
+#platform .plan-goal-plan .section-title{align-items:flex-start;margin-bottom:12px}
+#platform .plan-goal-summary p{margin:6px 0;font-size:13px;overflow-wrap:anywhere}
+#platform .plan-goal-summary b{margin-right:8px}
+#platform .plan-goal-metrics{display:flex;flex-wrap:wrap;gap:14px;font-size:12px;color:var(--muted);margin:8px 0}
+#platform .plan-goal-metrics b{color:var(--ink)}
+#platform .plan-goal-metrics label{display:flex;align-items:center;gap:6px}
+#platform .plan-goal-metrics input{width:78px;border:1px solid var(--line);border-radius:8px;padding:4px 6px;font-size:12px;background:#fff}
+#platform .plan-verdict{margin-top:8px;padding:10px 12px;border-radius:10px;font-size:12px;background:var(--soft);color:var(--green)}
+#platform .plan-verdict.tight{background:#fff4ee;color:#a34a2f}
+#platform .plan-verdict.loose{background:#fdf6e3;color:#886326}
+#platform .plan-goal-form{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line);display:grid;gap:10px}
+#platform .plan-goal-form label{display:grid;gap:6px;font-size:12px;font-weight:600}
+#platform .plan-goal-form textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:10px 12px;font:inherit;resize:vertical;background:#fff}
+#platform .plan-goal-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+#platform .plan-goal-preview{margin-top:12px;padding:14px;border:1px solid var(--line);border-radius:12px;background:#fff}
+#platform .plan-today{margin-top:16px;padding-top:14px;border-top:1px dashed var(--line)}
+#platform .plan-task-list{list-style:none;margin:10px 0 8px;padding:0;display:grid;gap:8px}
+#platform .plan-task{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:8px 10px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:13px}
+#platform .plan-task.is-done{border-color:#cfe0d6;background:var(--soft)}
+#platform .plan-task.is-done .plan-task-title{text-decoration:line-through}
+#platform .plan-task.is-done .plan-task-kind{background:#fff;border:1px solid #cfe0d6}
+#platform .plan-task-kind{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--soft);color:var(--green);white-space:nowrap}
+#platform .plan-task-title{font-weight:600;overflow-wrap:anywhere}
+#platform .plan-task small{color:var(--muted)}
+#platform .plan-task-state{justify-self:end;font-size:12px;white-space:nowrap}
+#platform .plan-today-line{font-size:12px;color:var(--muted);margin:6px 0 10px}
+#platform .plan-today-line b{color:var(--ink)}
+@media(max-width:640px){#platform .plan-task{grid-template-columns:auto minmax(0,1fr);row-gap:6px}#platform .plan-task-state{justify-self:start}#platform .plan-task small{grid-column:1 / -1}}

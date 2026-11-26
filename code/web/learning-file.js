@@ -22,8 +22,17 @@ export async function learningFilePage(ctx, initialTab = "overview") {
   }).join("");
   const stats = [[profile.course_count,"已参与教学班"],[profile.submission_count,"课程作答"],[number(profile.average_score),"平均成绩"],[profile.weak_points.length,"待巩固知识点"]];
   const goalBar = (label, value, goal, rate) => `<div class="plan-goal"><div class="plan-goal-head"><span>${label}</span><b>${value} / ${goal}</b></div>${progressBar(rate, `${label} ${value} / ${goal}（${rate}%）`)}<small class="muted">已完成 ${rate}%</small></div>`;
+  const planGoal = plan?.plan || null;
+  const taskKindLabel = {resource:"资料", knowledge:"知识点", practice:"练习", code:"编程", review:"复习"};
+  const taskHint = {resource:"读完这份资料", knowledge:"把这个知识点的题做一遍", practice:"提交这一组练习",
+    code:"提交编程题并拿到通过", review:"在错题本里复习这道题"};
+  const planTaskRows = (planGoal?.tasks?.cards || []).map(card => `<li class="plan-task${card.done ? " is-done" : ""}"><span class="plan-task-kind">${esc(taskKindLabel[card.kind] || "任务")}</span><span class="plan-task-title">${esc(card.title)}</span><small class="muted">${card.minutes} 分钟 · ${esc(taskHint[card.kind] || "")}</small><span class="plan-task-state">${card.done ? "已完成" : link(card.kind === "review" ? "review-center" : "learning-center", "去完成", "ghost small")}</span></li>`).join("");
+  const planGoalBlock = `<div class="plan-goal-plan"><div class="section-title"><div><span class="eyebrow">GOAL TO TASKS</span><h2>目标与今日任务</h2><p class="muted">用一句话说出目标，平台折算成每周与每天的任务；完成情况按真实提交与复习记录回算，不做手工打勾。</p></div>${planGoal?.goal ? `<span class="tag published">${esc(planGoal.goal.parsed.deadline)} 前</span>` : ""}</div>
+    ${planGoal?.goal ? `<div class="plan-goal-summary"><p><b>目标</b>${esc(planGoal.goal.text)}</p><div class="plan-goal-metrics"><span>周期 <b>${planGoal.goal.parsed.weeks} 周</b></span><span>每周可投入 <b>${planGoal.goal.parsed.weekly_minutes} 分钟</b></span><span>可学天数 <b>${planGoal.goal.parsed.allowed_days} 天</b></span><span>工作量 <b>${planGoal.workload?.minutes ?? 0} 分钟</b></span><span>预算占比 <b>${Math.round((planGoal.verdict?.ratio || 0) * 100)}%</b></span></div><p class="plan-verdict ${esc(planGoal.verdict?.verdict || "")}">${esc(planGoal.verdict?.advice || "")}</p></div>
+      <div class="plan-today"><div class="section-title"><div><h3>今日任务</h3><p class="muted">${esc(planGoal.tasks?.date || "")} · 计划 ${planGoal.tasks?.planned_minutes ?? 0} 分钟，已完成 ${planGoal.tasks?.done_minutes ?? 0} 分钟 · 本周第 ${planGoal.week?.index ?? 1} 周（${esc(planGoal.week?.start || "")} 至 ${esc(planGoal.week?.end || "")}）</p></div><span class="tag ${planGoal.tasks?.total && planGoal.tasks.done === planGoal.tasks.total ? "published" : "attention"}">${planGoal.tasks?.done ?? 0} / ${planGoal.tasks?.total ?? 0}</span></div>${planTaskRows ? `<ul class="plan-task-list">${planTaskRows}</ul>` : `<p class="muted">今天没有排到任务：目标范围里的内容已经做完，可以重新设一个更长或更大的目标。</p>`}<small class="muted">今日完成率 ${planGoal.tasks?.rate ?? 0}% · 本周计划 ${planGoal.week?.minutes ?? 0} 分钟</small></div>` : `<p class="muted">还没有设定目标。写一句话，平台会折算成每周与每天的任务。</p>`}
+    <form class="plan-goal-form" id="plan-goal-form"><label>我的目标<textarea id="plan-goal-text" rows="2" maxlength="200" placeholder="例如：4 周内掌握 Python 的循环和函数，每周能投入 5 小时，周末不学">${esc(planGoal?.goal?.text || "")}</textarea></label><div class="plan-goal-actions"><button class="secondary" type="submit">${icon("target")}${planGoal?.goal ? "重新解析" : "解析目标"}</button>${planGoal?.goal ? `<button class="ghost" type="button" id="plan-goal-clear">清除目标</button>` : ""}</div></form><div id="plan-goal-preview" role="status"></div></div>`;
   const planBlock = plan ? `<section class="plan-board"><div class="plan-board-head"><div><span class="eyebrow">CHECK IN</span><h2>学习计划与打卡</h2><p class="muted">${esc(plan.scope)}</p></div><div class="plan-streak"><b>${plan.streak.current}</b><span>连续学习天数</span><small>最长 ${plan.streak.longest} 天 · 近 30 天活跃 ${plan.calendar.filter(item => item.active).length} 天</small></div></div><div class="plan-goals wide">${goalBar("本周练习", plan.week.submissions, plan.goals.weekly_submissions, plan.week.submission_rate)}${goalBar("本周复习", plan.week.reviews, plan.goals.weekly_reviews, plan.week.review_rate)}</div><form class="plan-form" id="plan-form"><label>每周练习次数<input type="number" id="goal-submissions" min="1" max="50" step="1" value="${plan.goals.weekly_submissions}" required></label><label>每周复习题数<input type="number" id="goal-reviews" min="1" max="50" step="1" value="${plan.goals.weekly_reviews}" required></label><button class="secondary" type="submit">${icon("check")}保存目标</button></form><p class="plan-note muted">统计周期 ${plan.week.start} 至 ${plan.week.end}（本地自然周）· 今日已练习 ${plan.today.submissions} 次、复习 ${plan.today.reviews} 题、待复习 ${plan.today.due} 题</p><div class="checkin-grid">${plan.calendar.map(item => `<div class="checkin-cell${item.active ? " is-active" : ""}${item.today ? " is-today" : ""}" title="${item.date} · 练习 ${item.submissions} 次 · 复习 ${item.reviews} 题"><span>${item.label}</span><i>${item.active ? item.submissions + item.reviews : ""}</i></div>`).join("")}</div><div class="checkin-legend"><span><i class="is-active"></i>有学习活动</span><span><i></i>无活动</span><span class="muted">最近 30 天</span></div></section><section class="achievement-board"><div class="section-title"><div><span class="eyebrow">ACHIEVEMENTS</span><h2>成就</h2></div><span class="muted">已解锁 ${plan.achievements.filter(item => item.unlocked).length} / ${plan.achievements.length}</span></div><div class="achievement-grid">${plan.achievements.map(item => `<div class="achievement${item.unlocked ? " is-unlocked" : ""}"><span class="achievement-mark">${icon(item.unlocked ? "check" : "target")}</span><div><b>${esc(item.title)}</b><small>${esc(item.desc)}</small></div></div>`).join("")}</div></section>` : "";
-  const planPanel = plan ? `<details class="learning-plan-details" id="learning-plan" ${params.get("panel") === "plan" ? "open" : ""}><summary>${icon("check")}学习计划与打卡<span>连续 ${plan.streak.current} 天 · 本周练习 ${plan.week.submissions}/${plan.goals.weekly_submissions} 次</span></summary>${planBlock}</details>` : "";
+  const planPanel = plan ? `<details class="learning-plan-details" id="learning-plan" ${params.get("panel") === "plan" ? "open" : ""}><summary>${icon("check")}学习计划与打卡<span>连续 ${plan.streak.current} 天 · 本周练习 ${plan.week.submissions}/${plan.goals.weekly_submissions} 次</span></summary>${planGoalBlock}${planBlock}</details>` : "";
   const portraitParts = portrait?.investment?.parts || [];
   const portraitCategories = portrait?.categories || [];
   const knowledgeRows = portrait?.knowledge_points || [];
@@ -78,6 +87,52 @@ export async function learningFilePage(ctx, initialTab = "overview") {
     if (planDetails.open) url.searchParams.set("panel", "plan"); else url.searchParams.delete("panel");
     history.replaceState(null, "", url);
   };
+  const goalForm = root.querySelector("#plan-goal-form");
+  const goalPreview = root.querySelector("#plan-goal-preview");
+  const sendJson = (url, method, body) => api(url, {method,
+    headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const renderGoalPreview = data => {
+    const {parsed, workload, verdict} = data;
+    const kinds = Object.entries(workload.by_kind || {}).map(([kind, minutes]) => `${taskKindLabel[kind] || kind} ${minutes} 分钟`).join(" · ");
+    goalPreview.innerHTML = `<div class="plan-goal-preview"><div class="plan-goal-metrics"><span>周期 <b>${parsed.weeks} 周</b>（到 ${esc(parsed.deadline)}）</span><span>每周可投入 <b>${parsed.weekly_minutes} 分钟</b></span><span>可学 <b>${parsed.allowed_days} 天/周</b></span><span>每天约 <b>${parsed.daily_capacity} 分钟</b></span><span>识别的课程 <b>${esc((data.courses || []).map(item => item.title).join("、") || "全部已加入课程")}</b></span></div><p class="muted">工作量 ${workload.minutes} 分钟（${esc(kinds || "暂无待做内容")}），预算 ${verdict.budget} 分钟，占比 ${Math.round(verdict.ratio * 100)}%。</p><p class="plan-verdict ${esc(verdict.verdict)}">${esc(verdict.advice)}</p>${(parsed.notes || []).length ? `<small class="muted">${esc(parsed.notes.join("；"))}</small>` : ""}<div class="plan-goal-actions"><button class="primary" type="button" id="plan-goal-confirm">${icon("check")}确认并生成任务</button><button class="ghost" type="button" id="plan-goal-adjust">${icon("refresh")}改预算重算</button></div><div id="plan-goal-adjust-box" hidden><div class="plan-goal-metrics"><label>周期（周）<input type="number" id="plan-goal-weeks" min="1" max="26" value="${parsed.weeks}"></label><label>每周分钟<input type="number" id="plan-goal-minutes" min="30" max="1800" step="10" value="${parsed.weekly_minutes}"></label><label>可学天数<input type="number" id="plan-goal-days" min="1" max="7" value="${parsed.allowed_days}"></label></div><button class="secondary small" type="button" id="plan-goal-reparse">按新预算重新核算</button></div></div>`;
+    goalPreview.querySelector("#plan-goal-confirm").onclick = async event => {
+      const button = event.target.closest("button");
+      button.disabled = true;
+      try {
+        await sendJson("/api/student/plan/goal", "PUT", {text: parsed.text, weeks: parsed.weeks,
+          weekly_minutes: parsed.weekly_minutes, allowed_days: parsed.allowed_days});
+        tell("目标已保存，今日任务已按新目标生成");
+        location.reload();
+      } catch (error) { tell(error.message); button.disabled = false; }
+    };
+    goalPreview.querySelector("#plan-goal-adjust").onclick = () => {
+      const box = goalPreview.querySelector("#plan-goal-adjust-box");
+      box.hidden = !box.hidden;
+    };
+    goalPreview.querySelector("#plan-goal-reparse").onclick = async () => {
+      const weeks = Number(goalPreview.querySelector("#plan-goal-weeks").value);
+      const minutes = Number(goalPreview.querySelector("#plan-goal-minutes").value);
+      const days = Number(goalPreview.querySelector("#plan-goal-days").value);
+      try {
+        renderGoalPreview(await sendJson("/api/student/plan/parse", "POST",
+          {text: parsed.text, weeks, weekly_minutes: minutes, allowed_days: days}));
+        tell("已按新预算重新核算");
+      } catch (error) { tell(error.message); }
+    };
+  };
+  if (goalForm) goalForm.onsubmit = async event => {
+    event.preventDefault();
+    const text = root.querySelector("#plan-goal-text").value.trim();
+    if (text.length < 4) { tell("请写清目标，例如 4 周内掌握 Python 的循环和函数"); return; }
+    const button = event.target.querySelector("button[type=submit]");
+    button.disabled = true;
+    try { renderGoalPreview(await sendJson("/api/student/plan/parse", "POST", {text})); }
+    catch (error) { tell(error.message); } finally { button.disabled = false; }
+  };
+  root.querySelector("#plan-goal-clear")?.addEventListener("click", async () => {
+    try { await sendJson("/api/student/plan/goal", "DELETE", {}); tell("已清除目标"); location.reload(); }
+    catch (error) { tell(error.message); }
+  });
   const planForm = root.querySelector("#plan-form");
   if (planForm) planForm.onsubmit = async event => {
     event.preventDefault();

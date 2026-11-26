@@ -402,6 +402,344 @@ def reading_payload(data, student_id, courses=None):
             "recent": recent}
 
 
+# ── 学习计划：一句话目标 → 工作量核算 → 每周/每天任务 ──────────────────────────
+
+PLAN_TASK_LABELS = {"resource": "读资料", "knowledge": "知识点", "practice": "练习",
+                    "code": "编程", "review": "复习"}
+PLAN_ESTIMATE = {"resource_base": 5.0, "chars_per_minute": 300.0, "knowledge": 10.0,
+                 "choice": 1.5, "code": 12.0, "review": 2.0}
+PLAN_MIN_WEEKLY_MINUTES = 30
+PLAN_MAX_WEEKLY_MINUTES = 1800
+PLAN_MAX_WEEKS = 26
+PLAN_DAILY_CAP_MINUTES = 90
+PLAN_REVIEW_SHARE = 0.2
+PLAN_LOOSE_RATIO = 0.6
+PLAN_TIGHT_RATIO = 1.2
+PLAN_DEFAULT_WEEKS = 8
+PLAN_DEFAULT_WEEKLY_MINUTES = 180
+PLAN_CN_NUMBERS = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7,
+                   "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12}
+
+
+def plan_number(token: str) -> int:
+    """把阿拉伯数字或常见中文数字读数成整数；读不出就返回 0，交给默认值兜底。"""
+    token = (token or "").strip()
+    if token.isdigit():
+        return int(token)
+    if token in PLAN_CN_NUMBERS:
+        return PLAN_CN_NUMBERS[token]
+    if token.startswith("十") and len(token) == 2 and token[1] in PLAN_CN_NUMBERS:
+        return 10 + PLAN_CN_NUMBERS[token[1]]
+    if token.startswith("二十") and len(token) == 3 and token[2] in PLAN_CN_NUMBERS:
+        return 20 + PLAN_CN_NUMBERS[token[2]]
+    return 0
+
+
+def plan_course_matches(text: str, courses) -> list:
+    """从原话里找课程：标题片段命中越长越可信，英文词（Python/Web）单独加权。"""
+    lowered = text.lower()
+    scores = []
+    for course in courses or []:
+        title = str(course.get("title") or "")
+        best = 0
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9+#]{1,}", title):
+            if word.lower() in lowered:
+                best = max(best, len(word) + 2)
+        for start in range(len(title)):
+            for end in range(start + 3, min(len(title), start + 8) + 1):
+                if title[start:end] in text:
+                    best = max(best, end - start)
+        if best >= 3:
+            scores.append((best, course["id"]))
+    if not scores:
+        return []
+    top = max(score for score, _ in scores)
+    return [course_id for score, course_id in scores if score >= max(3, top - 1)][:4]
+
+
+def parse_plan_text(text, courses, moment=None):
+    """规则解析：期限、每周可投入、可学天数、目标课程、强度。不调用模型也能出结果。"""
+    now = moment or datetime.now(timezone.utc)
+    today = local_day(now)
+    raw = re.sub(r"\s+", " ", str(text or "")).strip()[:300]
+    notes = []
+    weeks = 0
+    match = re.search(r"(\d+|[一两二三四五六七八九十]+)\s*(?:个)?\s*(周|星期|礼拜)", raw)
+    if match:
+        weeks = plan_number(match.group(1))
+    if not weeks:
+        match = re.search(r"(\d+|[一两二三四五六七八九十]+)\s*个月", raw)
+        if match:
+            weeks = plan_number(match.group(1)) * 4
+    if not weeks:
+        match = re.search(r"(\d+|[一两二三四五六七八九十]+)\s*天", raw)
+        if match:
+            weeks = max(1, math.ceil(plan_number(match.group(1)) / 7))
+    if not weeks:
+        weeks = PLAN_DEFAULT_WEEKS
+        notes.append(f"没识别到期限，先按 {PLAN_DEFAULT_WEEKS} 周估算")
+    weeks = max(1, min(int(weeks), PLAN_MAX_WEEKS))
+
+    weekly = 0
+    match = re.search(r"每\s*(?:周|星期|礼拜)[^0-9]{0,6}(\d+(?:\.\d+)?)\s*(?:个)?\s*(小时|分钟|分|h|H|min)", raw)
+    if match:
+        unit = match.group(2)
+        weekly = float(match.group(1)) * (60 if unit in ("小时", "h", "H") else 1)
+    else:
+        match = re.search(r"每\s*天[^0-9]{0,6}(\d+(?:\.\d+)?)\s*(?:个)?\s*(小时|分钟|分|h|H|min)", raw)
+        if match:
+            unit = match.group(2)
+            weekly = float(match.group(1)) * (60 if unit in ("小时", "h", "H") else 1) * 7
+            notes.append("按每天的可投入折算成每周")
+    if not weekly:
+        weekly = PLAN_DEFAULT_WEEKLY_MINUTES
+        notes.append(f"没识别到每周可投入，先按每周 {PLAN_DEFAULT_WEEKLY_MINUTES} 分钟估算")
+    weekly = int(max(PLAN_MIN_WEEKLY_MINUTES, min(round(weekly), PLAN_MAX_WEEKLY_MINUTES)))
+
+    allowed = 7
+    if re.search(r"周末[^。，,]{0,4}(?:不|没|不能|无法)|只在?工作日|工作日学", raw):
+        allowed = 5
+    elif re.search(r"(?:只|就)在?周末|只有周末", raw):
+        allowed = 2
+
+    intensity = "standard"
+    if re.search(r"掌握|熟练|做项目|深入|精通|能写出", raw):
+        intensity = "deep"
+    elif re.search(r"了解|过一遍|预习|随便看看|随便学", raw):
+        intensity = "light"
+
+    course_ids = plan_course_matches(raw, courses)
+    if not course_ids:
+        notes.append("没匹配到具体课程，按你已加入的教学班全部课程计算")
+
+    return {"text": raw, "weeks": int(weeks), "weekly_minutes": int(weekly),
+            "allowed_days": int(allowed), "intensity": intensity,
+            "daily_capacity": int(min(weekly / allowed, PLAN_DAILY_CAP_MINUTES)),
+            "course_ids": course_ids, "start": today.isoformat(),
+            "deadline": (today + timedelta(days=weeks * 7)).isoformat(),
+            "source": "rules", "notes": notes}
+
+
+def estimate_plan_workload(data, student, courses):
+    """把"学什么"折算成分钟：资料按字数（带兜底）、知识点、单选、编程、到期复习分别计时。"""
+    sid = student["id"]
+    submissions = [item for item in (data.get("submissions") or []) if item.get("student_id") == sid]
+    answered = {detail.get("question_id") for item in submissions
+                for detail in (item.get("details") or []) if detail.get("question_id")}
+    reading = (data.get("reading_progress") or {}).get(sid) or {}
+    items = []
+    for course in courses or []:
+        cid = course.get("id")
+        for resource in course.get("resources") or []:
+            body = str(resource.get("content") or "")
+            if not body.strip():
+                continue  # 没有正文的资料没有阅读上报点，排进计划就永远完不成
+            if int((reading.get(resource.get("id")) or {}).get("percent") or 0) >= READING_THRESHOLD:
+                continue
+            minutes = PLAN_ESTIMATE["resource_base"] + max(
+                0.0, (len(body) - 300) / PLAN_ESTIMATE["chars_per_minute"])
+            items.append({"kind": "resource", "course_id": cid, "ref_id": resource.get("id"),
+                          "title": str(resource.get("name") or "学习资料")[:40],
+                          "minutes": round(minutes)})
+        names = {kp["id"]: kp.get("name") or "未命名知识点" for kp in course.get("knowledge_points") or []}
+        questions = course.get("questions") or []
+        for kp_id, kp_name in names.items():
+            todo = [q.get("id") for q in questions
+                    if q.get("knowledge_point_id") == kp_id and q.get("id") not in answered]
+            if not todo:
+                continue  # 这个知识点的题都做过了，不再当新任务
+            items.append({"kind": "knowledge", "course_id": cid, "ref_id": kp_id, "title": kp_name,
+                          "question_ids": todo, "minutes": round(PLAN_ESTIMATE["knowledge"])})
+            items.append({"kind": "practice", "course_id": cid, "ref_id": kp_id,
+                          "title": f"{kp_name} · {len(todo)} 题", "question_ids": todo,
+                          "count": len(todo), "minutes": round(len(todo) * PLAN_ESTIMATE["choice"])})
+        for question in course.get("programming_questions") or []:
+            if question.get("id") in answered:
+                continue
+            items.append({"kind": "code", "course_id": cid, "ref_id": question.get("id"),
+                          "title": str(question.get("title") or "编程题")[:40],
+                          "minutes": round(PLAN_ESTIMATE["code"])})
+    wrong = [record for record in (data.get("wrong_questions") or [])
+             if record.get("student_id") == sid and record.get("status") != "mastered"]
+    for record in wrong[:60]:
+        text = (record.get("question_snapshot") or {}).get("text") or "错题复习"
+        items.append({"kind": "review", "course_id": record.get("course_id"), "ref_id": record.get("id"),
+                      "title": str(text)[:30], "minutes": round(PLAN_ESTIMATE["review"])})
+    counts, by_kind = {}, {}
+    for item in items:
+        counts[item["kind"]] = counts.get(item["kind"], 0) + 1
+        by_kind[item["kind"]] = by_kind.get(item["kind"], 0) + item["minutes"]
+    return {"items": items, "minutes": sum(item["minutes"] for item in items),
+            "by_kind": by_kind, "counts": counts}
+
+
+def plan_verdict(workload_minutes, weekly_minutes, weeks):
+    """工作量 / 预算：偏松、匹配、偏紧三档，并给出能照着改的建议。"""
+    budget = max(1, int(weekly_minutes) * int(weeks))
+    ratio = workload_minutes / budget
+    if ratio < PLAN_LOOSE_RATIO:
+        verdict = "loose"
+        advice = (f"目标偏松：{workload_minutes} 分钟的工作量只占 {budget} 分钟预算的 "
+                  f"{round(ratio * 100)}%，可以扩到更多课程，或者把编程题重做一遍。")
+    elif ratio <= PLAN_TIGHT_RATIO:
+        verdict = "ok"
+        advice = f"目标和容量匹配（{round(ratio * 100)}%），建议留 20% 预算给到期复习。"
+    else:
+        verdict = "tight"
+        advice = (f"工作量超出预算 {round((ratio - 1) * 100)}%，需要缩范围、延长期限，"
+                  f"或者把每周可投入调高。")
+    return {"budget": budget, "ratio": round(ratio, 2), "verdict": verdict, "advice": advice}
+
+
+def build_plan_weeks(items, parsed, start_day):
+    """按周装填：复习先占 20% 预算，其余新内容按顺序推进，装不下就顺延到下一周。"""
+    weekly = max(1, int(parsed.get("weekly_minutes") or PLAN_DEFAULT_WEEKLY_MINUTES))
+    weeks_count = max(1, int(parsed.get("weeks") or PLAN_DEFAULT_WEEKS))
+    reviews = [item for item in items if item["kind"] == "review"]
+    others = [item for item in items if item["kind"] != "review"]
+    review_budget = weekly * PLAN_REVIEW_SHARE
+    plans, review_index, cursor = [], 0, 0
+    for index in range(weeks_count):
+        begin = start_day + timedelta(days=index * 7)
+        slots, minutes = [], 0
+        while (review_index < len(reviews)
+               and minutes + reviews[review_index]["minutes"] <= review_budget):
+            item = reviews[review_index]
+            slots.append(item)
+            minutes += item["minutes"]
+            review_index += 1
+        while cursor < len(others) and minutes + others[cursor]["minutes"] <= weekly:
+            item = others[cursor]
+            slots.append(item)
+            minutes += item["minutes"]
+            cursor += 1
+        if not slots and cursor < len(others):  # 单条就超过周预算，也要排进去，别卡死
+            item = others[cursor]
+            slots.append(item)
+            minutes += item["minutes"]
+            cursor += 1
+        if slots:
+            plans.append({"index": index + 1, "start": begin.isoformat(),
+                          "end": (begin + timedelta(days=6)).isoformat(),
+                          "minutes": minutes, "items": slots})
+        if cursor >= len(others) and review_index >= len(reviews):
+            break
+    return plans
+
+
+def plan_day_activity(data, student, today):
+    """今天的完成证据：全部从已有事件和提交记录派生，不加新埋点。"""
+    sid = student["id"]
+
+    def same_day(stamp):
+        return bool(stamp) and local_day(stamp) == today
+
+    events = [item for item in (data.get("learning_events") or [])
+              if item.get("student_id") == sid and same_day(item.get("ts"))]
+    read = {item.get("ref_id") for item in events if item.get("type") == "resource_read"}
+    reviewed = {item.get("ref_id") for item in events if item.get("type") == "review"}
+    answers, code_ids = {}, set()
+    for submission in data.get("submissions") or []:
+        if submission.get("student_id") != sid or not same_day(submission.get("submitted_at")):
+            continue
+        if submission.get("type") == "python":
+            code_ids.add(submission.get("question_id"))
+        for detail in submission.get("details") or []:
+            qid = detail.get("question_id")
+            if qid:
+                answers[qid] = bool(answers.get(qid)) or bool(detail.get("correct"))
+    return {"read": read, "reviewed": reviewed, "answered": answers, "code": code_ids}
+
+
+def plan_task_done(card, activity):
+    """单张任务卡是否完成；按卡的类型查对应的证据。"""
+    kind = card.get("kind")
+    if kind == "resource":
+        return card.get("ref_id") in activity["read"]
+    if kind == "review":
+        return card.get("ref_id") in activity["reviewed"]
+    if kind == "practice":
+        return any(qid in activity["answered"] for qid in card.get("question_ids") or [])
+    if kind == "knowledge":
+        return any(activity["answered"].get(qid) for qid in card.get("question_ids") or [])
+    if kind == "code":
+        return card.get("ref_id") in activity["code"]
+    return False
+
+
+def plan_today_cards(items, parsed, data, student, saved, today):
+    """今日任务：当天已生成就沿用（保持稳定），跨天按日容量从剩余任务里重新挑。"""
+    tasks = saved.setdefault("tasks", {})
+    key = today.isoformat()
+    cards = tasks.get(key)
+    activity = plan_day_activity(data, student, today)
+    if not cards:
+        capacity = int(min((parsed.get("weekly_minutes") or PLAN_DEFAULT_WEEKLY_MINUTES)
+                           / max(1, parsed.get("allowed_days") or 7), PLAN_DAILY_CAP_MINUTES))
+        # 排序原则：逾期复习先上（每天最多 3 张），再按章节顺序放新内容
+        picked, spent = [], 0
+        for item in [entry for entry in items if entry["kind"] == "review"][:3]:
+            picked.append({**item, "id": f"{item['kind']}:{item['ref_id']}"})
+            spent += item["minutes"]
+        for item in items:
+            if item["kind"] == "review":
+                continue
+            if spent and spent + item["minutes"] > capacity:
+                break
+            picked.append({**item, "id": f"{item['kind']}:{item['ref_id']}"})
+            spent += item["minutes"]
+            if spent >= capacity:
+                break
+        cards = picked
+        tasks[key] = cards
+        for old in sorted(tasks)[:-14]:  # 只留最近 14 天，别让 study_plans 无限长
+            tasks.pop(old, None)
+    view = [{**card, "done": plan_task_done(card, activity)} for card in cards]
+    done_count = sum(1 for card in view if card["done"])
+    planned = sum(card["minutes"] for card in view)
+    return {"date": key, "cards": view, "total": len(view), "done": done_count,
+            "planned_minutes": planned,
+            "done_minutes": sum(card["minutes"] for card in view if card["done"]),
+            "rate": int(round(done_count / len(view) * 100)) if view else 0}
+
+
+def study_plan_goal_view(data, student, courses, moment=None):
+    """GET /api/student/plan 的扩展部分：目标、工作量、诊断、周摘要、今日任务。"""
+    today = local_day(moment)
+    saved = (data.get("study_plans") or {}).get(student["id"]) or {}
+    goal = saved.get("goal")
+    if not goal:
+        return {"goal": None, "tasks": None, "weeks": [], "workload": None,
+                "verdict": None, "week": None}
+    parsed = goal.get("parsed") or {}
+    scope = [course for course in (courses or [])
+             if not parsed.get("course_ids") or course.get("id") in parsed["course_ids"]]
+    if not scope:
+        scope = list(courses or [])
+    workload = estimate_plan_workload(data, student, scope)
+    verdict = plan_verdict(workload["minutes"],
+                           parsed.get("weekly_minutes") or PLAN_DEFAULT_WEEKLY_MINUTES,
+                           parsed.get("weeks") or PLAN_DEFAULT_WEEKS)
+    start = local_day(parsed.get("start")) if parsed.get("start") else today
+    weeks = build_plan_weeks(workload["items"], parsed, start)
+    current = next((plan for plan in weeks
+                    if plan["start"] <= today.isoformat() <= plan["end"]), None)
+    if current is None:
+        current = weeks[0] if weeks else None
+    tasks = plan_today_cards(workload["items"], parsed, data, student, saved, today)
+    return {"goal": {"text": goal.get("text"), "parsed": parsed,
+                     "created_at": goal.get("created_at")},
+            "workload": {"minutes": workload["minutes"], "by_kind": workload["by_kind"],
+                         "counts": workload["counts"]},
+            "verdict": verdict,
+            "weeks": [{"index": plan["index"], "start": plan["start"], "end": plan["end"],
+                       "minutes": plan["minutes"], "count": len(plan["items"])} for plan in weeks],
+            "week": None if current is None else
+                    {"index": current["index"], "start": current["start"], "end": current["end"],
+                     "minutes": current["minutes"], "count": len(current["items"])},
+            "tasks": tasks}
+
+
 def portrait_payload(data, student, own_profile=None, moment=None, courses=None):
     """学生画像：投入度四分量 + 五个维度，全部由学习事件与错题调度现算。
 
@@ -2977,7 +3315,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             "totals": {"submissions": total_submissions, "reviews": total_reviews,
                        "unresolved": len(unresolved), "mastered": len(wrong) - len(unresolved),
                        "due": len(due)},
-            "scope": "只统计正式练习提交与错题复习；打开页面、看视频不计入打卡",
+                "plan": study_plan_goal_view(data, student,
+                                         [course for course in data.get("courses") or []
+                                          if accepts_student(course, student)]),
+        "scope": "只统计正式练习提交与错题复习；打开页面、看视频不计入打卡",
         }
 
     @app.get("/api/student/plan")
@@ -2985,7 +3326,12 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         student = require_role(request, "student")
         store = request.app.state.learning
         with store.lock:
-            return study_plan_payload(store, student)
+            saved = (store.data.get("study_plans") or {}).get(student["id"]) or {}
+            had_today = bool((saved.get("tasks") or {}).get(local_day().isoformat()))
+            payload = study_plan_payload(store, student)
+            if not had_today and (payload.get("plan") or {}).get("tasks"):
+                store.save()  # 今日任务卡在读取时生成，补一次落盘避免每次重算
+            return payload
 
     @app.post("/api/student/plan")
     async def update_student_plan(request: Request):
@@ -3000,7 +3346,93 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             goals[key] = value
         store = request.app.state.learning
         with store.lock:
-            store.data.setdefault("study_plans", {})[student["id"]] = {**goals, "updated_at": LearningStore.now()}
+            plans = store.data.setdefault("study_plans", {})
+            entry = plans.setdefault(student["id"], {})
+            # 合并写入：这两个旧目标可以改，但目标计划与任务不能被清掉
+            entry.update({**goals, "updated_at": LearningStore.now()})
+            store.save()
+            return study_plan_payload(store, student)
+
+    def plan_scope_courses(courses, parsed):
+        """目标里点名了课程就只算那几门，否则按全部可见课程。"""
+        scope = [course for course in courses
+                 if not parsed.get("course_ids") or course["id"] in parsed["course_ids"]]
+        return scope or list(courses)
+
+    @app.post("/api/student/plan/parse")
+    async def parse_student_plan_goal(request: Request):
+        """把一句话解析成目标并给出工作量诊断，不落库。"""
+        student = require_role(request, "student")
+        payload = await json_object(request)
+        text = str(payload.get("text") or "").strip()
+        if len(text) < 4:
+            raise HTTPException(400, '请用一句话写清目标，例如"4 周内掌握 Python 的循环和函数"')
+        store = request.app.state.learning
+        with store.lock:
+            courses = [course for course in store.data.get("courses") or []
+                       if accepts_student(course, student)]
+            parsed = parse_plan_text(text, courses)
+            scope = plan_scope_courses(courses, parsed)
+            workload = estimate_plan_workload(store.data, student, scope)
+            verdict = plan_verdict(workload["minutes"], parsed["weekly_minutes"], parsed["weeks"])
+            return {"parsed": parsed,
+                    "workload": {"minutes": workload["minutes"], "by_kind": workload["by_kind"],
+                                 "counts": workload["counts"]},
+                    "verdict": verdict,
+                    "courses": [{"id": course["id"], "title": course["title"],
+                                 "teaching_class": course.get("teaching_class")} for course in scope]}
+
+    @app.put("/api/student/plan/goal")
+    async def save_student_plan_goal(request: Request):
+        """确认生成：落库目标与解析结果，清空旧任务让今日卡按新目标重算。"""
+        student = require_role(request, "student")
+        payload = await json_object(request)
+        text = str(payload.get("text") or "").strip()
+        if len(text) < 4:
+            raise HTTPException(400, '请用一句话写清目标，例如"4 周内掌握 Python 的循环和函数"')
+        store = request.app.state.learning
+        with store.lock:
+            courses = [course for course in store.data.get("courses") or []
+                       if accepts_student(course, student)]
+            parsed = parse_plan_text(text, courses)
+            # 确认卡允许改期限、每周预算与可学天数，但必须落在有效区间
+            for key, low, high, label in (("weeks", 1, PLAN_MAX_WEEKS, "周期（周）"),
+                                          ("weekly_minutes", PLAN_MIN_WEEKLY_MINUTES,
+                                           PLAN_MAX_WEEKLY_MINUTES, "每周可投入（分钟）"),
+                                          ("allowed_days", 1, 7, "每周可学习天数")):
+                if key not in payload:
+                    continue
+                try:
+                    value = int(payload[key])
+                except (TypeError, ValueError):
+                    raise HTTPException(400, f"{label}需为整数")
+                if not low <= value <= high:
+                    raise HTTPException(400, f"{label}需在 {low} 到 {high} 之间")
+                parsed[key] = value
+            parsed["daily_capacity"] = int(min(parsed["weekly_minutes"] / parsed["allowed_days"],
+                                              PLAN_DAILY_CAP_MINUTES))
+            parsed["deadline"] = (local_day(parsed["start"])
+                                  + timedelta(days=parsed["weeks"] * 7)).isoformat()
+            plans = store.data.setdefault("study_plans", {})
+            entry = plans.setdefault(student["id"], {})
+            entry["goal"] = {"text": text, "parsed": parsed, "created_at": LearningStore.now()}
+            entry["tasks"] = {}
+            entry["updated_at"] = LearningStore.now()
+            store.save()
+            view = study_plan_payload(store, student)
+            store.save()  # 今日任务卡在读取时才生成，这里补一次落盘
+            return view
+
+    @app.delete("/api/student/plan/goal")
+    async def clear_student_plan_goal(request: Request):
+        """清空目标：只删目标与任务，保留原有每周打卡目标。"""
+        student = require_role(request, "student")
+        store = request.app.state.learning
+        with store.lock:
+            entry = (store.data.get("study_plans") or {}).get(student["id"]) or {}
+            entry.pop("goal", None)
+            entry.pop("tasks", None)
+            entry["updated_at"] = LearningStore.now()
             store.save()
             return study_plan_payload(store, student)
 

@@ -964,5 +964,83 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertIn("rhythm", live)
 
 
+    def test_23_learning_plan_goal_to_tasks(self):
+        """一句话目标 → 解析 → 工作量诊断 → 今日任务，并按真实记录回算完成度。"""
+        from datetime import date
+
+        from demo.app import (build_plan_weeks, parse_plan_text, plan_task_done,
+                              plan_verdict)
+
+        parsed = parse_plan_text("两周内学完 Python 程序设计入门，每周只有 2 小时", [])
+        self.assertEqual(parsed["weeks"], 2)
+        self.assertEqual(parsed["weekly_minutes"], 120)
+        self.assertEqual(parsed["allowed_days"], 7)
+        light = parse_plan_text("4 周内过一遍这门课，每周 5 小时，周末不学", [])
+        self.assertEqual(light["weekly_minutes"], 300)
+        self.assertEqual(light["allowed_days"], 5)
+        self.assertEqual(light["intensity"], "light")
+        self.assertEqual(parse_plan_text("", [])["weeks"], 8)
+
+        self.assertEqual(plan_verdict(120, 120, 2)["verdict"], "loose")
+        tight = plan_verdict(300, 120, 2)
+        self.assertEqual(tight["verdict"], "tight")
+        self.assertEqual(tight["budget"], 240)
+        self.assertEqual(plan_verdict(200, 120, 2)["verdict"], "ok")
+
+        items = ([{"kind": "resource", "ref_id": f"r{i}", "minutes": 12} for i in range(3)]
+                 + [{"kind": "review", "ref_id": f"w{i}", "minutes": 2} for i in range(5)])
+        weeks = build_plan_weeks(items, {"weeks": 3, "weekly_minutes": 24}, date(2026, 1, 5))
+        self.assertTrue(weeks)
+        self.assertLessEqual(weeks[0]["minutes"], 24)
+        self.assertEqual(weeks[0]["start"], "2026-01-05")
+        self.assertEqual(weeks[0]["end"], "2026-01-11")
+
+        activity = {"read": {"r1"}, "reviewed": {"w1"}, "answered": {"q1": True, "q2": False},
+                    "code": {"p1"}}
+        self.assertTrue(plan_task_done({"kind": "resource", "ref_id": "r1"}, activity))
+        self.assertFalse(plan_task_done({"kind": "resource", "ref_id": "r2"}, activity))
+        self.assertTrue(plan_task_done({"kind": "review", "ref_id": "w1"}, activity))
+        self.assertFalse(plan_task_done({"kind": "review", "ref_id": "w2"}, activity))
+        self.assertTrue(plan_task_done({"kind": "practice", "ref_id": "k", "question_ids": ["q2"]}, activity))
+        self.assertFalse(plan_task_done({"kind": "knowledge", "ref_id": "k", "question_ids": ["q2"]}, activity))
+        self.assertTrue(plan_task_done({"kind": "code", "ref_id": "p1"}, activity))
+
+        account = "student-demo-1"
+
+        def call(path, payload=None, method="POST"):
+            request = Request(self.url + path,
+                              data=json.dumps(payload).encode() if payload is not None else None,
+                              headers={"X-Local-Token": self.token, "X-Account-ID": account,
+                                       "Content-Type": "application/json"}, method=method)
+            with self.client.open(request, timeout=30) as response:
+                return json.load(response)
+
+        text = "4 周内掌握 Python 的循环和函数，每周能投入 5 小时"
+        preview = call("/api/student/plan/parse", {"text": text})
+        self.assertEqual(preview["parsed"]["weeks"], 4)
+        self.assertEqual(preview["parsed"]["weekly_minutes"], 300)
+        self.assertIn(preview["verdict"]["verdict"], {"loose", "ok", "tight"})
+        self.assertIsInstance(preview["workload"]["minutes"], int)
+
+        put = call("/api/student/plan/goal", {"text": text}, "PUT")
+        plan = put["plan"]
+        self.assertEqual(plan["goal"]["text"], text)
+        self.assertTrue(plan["weeks"])
+        first_ids = [card["id"] for card in plan["tasks"]["cards"]]
+        self.assertEqual(plan["tasks"]["total"], len(first_ids))
+
+        again = call("/api/student/plan", None, "GET")["plan"]
+        self.assertEqual([card["id"] for card in again["tasks"]["cards"]], first_ids)
+        self.assertIn(again["verdict"]["verdict"], {"loose", "ok", "tight"})
+
+        saved = call("/api/student/plan", {"weekly_submissions": 4, "weekly_reviews": 12})
+        self.assertEqual(saved["goals"]["weekly_submissions"], 4)
+        self.assertIsNotNone(saved["plan"]["goal"])
+
+        cleared = call("/api/student/plan/goal", {}, "DELETE")
+        self.assertIsNone(cleared["plan"]["goal"])
+        self.assertEqual(cleared["goals"]["weekly_submissions"], 4)
+
+
 if __name__ == "__main__":
     unittest.main()

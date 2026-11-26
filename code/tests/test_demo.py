@@ -735,5 +735,233 @@ class DemoIntegrationTest(unittest.TestCase):
 
 
 
+    def test_21_learning_events_and_portrait(self):
+        """事件层与画像：动作写进同一条流水，画像从流水现算，缺数据的分量不填 0。"""
+        from datetime import datetime, timezone
+        from demo.app import EVENT_KINDS, portrait_payload, record_event
+        data = {}
+        record_event(data, "s1", "practice_submit", "2026-11-16T03:00:00+00:00",
+                     course_id="c1", ref_id="r1", duration_seconds=420, source="course")
+        self.assertEqual(len(data["learning_events"]), 1)
+        event = data["learning_events"][0]
+        self.assertEqual(event["type"], "practice_submit")
+        self.assertEqual(event["source"], "course")
+        self.assertEqual(event["duration_seconds"], 420)
+        self.assertTrue(event["id"])
+        self.assertEqual(event["correct"], None)
+        # 打卡视图由事件派生：提交与复习计入，抢答不计入
+        self.assertEqual(data["study_activity"]["s1"]["2026-11-16"], {"submissions": 1, "reviews": 0})
+        record_event(data, "s1", "live_answer", "2026-11-16T04:00:00+00:00", correct=True)
+        self.assertEqual(data["study_activity"]["s1"]["2026-11-16"]["submissions"], 1)
+        record_event(data, "s1", "review", "2026-11-17T01:00:00+00:00", ref_id="w1", correct=True)
+        self.assertEqual(data["study_activity"]["s1"]["2026-11-17"], {"submissions": 0, "reviews": 1})
+        with self.assertRaises(ValueError):
+            record_event(data, "s1", "unknown_kind")
+        self.assertEqual(set(EVENT_KINDS), {"practice_submit", "code_submit", "review",
+                                            "live_answer", "ai_question_add", "video_watch",
+                                            "resource_read"})
+
+        now = datetime(2026, 11, 16, 8, 0, tzinfo=timezone.utc)
+        seeded = {
+            "submissions": [
+                {"student_id": "s1", "submitted_at": "2026-11-15T03:00:00+00:00", "score": 70,
+                 "details": [{"knowledge_point_name": "指针", "correct": False},
+                             {"knowledge_point_name": "循环", "correct": True}]},
+                {"student_id": "s1", "submitted_at": "2026-11-16T02:00:00+00:00", "score": 90,
+                 "details": [{"knowledge_point_name": "指针", "correct": True},
+                             {"knowledge_point_name": "循环", "correct": True}]},
+            ],
+            "wrong_questions": [
+                {"student_id": "s1", "status": "unresolved", "wrong_count": 3, "ease_factor": 2.2,
+                 "next_review_at": "2026-11-15T00:00:00+00:00", "review_interval_days": 2},
+                {"student_id": "s1", "status": "mastered", "wrong_count": 1,
+                 "next_review_at": "2026-11-30T00:00:00+00:00"},
+            ],
+            "learning_events": [{"student_id": "s1", "type": "practice_submit",
+                                 "ts": "2026-11-16T02:00:00+00:00"}],
+            "study_activity": {"s1": {"2026-11-16": {"submissions": 1, "reviews": 0},
+                                      "2026-11-15": {"submissions": 1, "reviews": 2}}},
+            "live_quizzes": [
+                {"status": "closed", "answers": [{"student_id": "s1", "correct": True}]},
+                {"status": "closed", "answers": []},
+                {"status": "running", "answers": []},
+            ],
+            "study_plans": {"s1": {"weekly_submissions": 4, "weekly_reviews": 8}},
+        }
+        portrait = portrait_payload(seeded, {"id": "s1", "name": "演示学生"},
+                                    {"average_score": 80}, now)
+        parts = portrait["investment"]["parts"]
+        self.assertEqual([item["id"] for item in parts], ["activity", "goal", "review", "live"])
+        self.assertEqual([item["weight"] for item in parts], [35, 25, 20, 20])
+        # 活跃：两周内有活动的 2 天 / 30 天
+        self.assertEqual(parts[0]["value"], round(2 / 30 * 100))
+        # 周目标：本周 1 次提交 / 4，0 次复习 / 8
+        self.assertEqual(parts[1]["value"], round((25 + 0) / 2))
+        # 复习履约：1 题待复习且已逾期，履约率 0
+        self.assertEqual(parts[2]["value"], 0)
+        # 课堂参与：2 场已结束，参与 1 场
+        self.assertEqual(parts[3]["value"], 50)
+        weight = sum(item["weight"] for item in parts if item["value"] is not None)
+        self.assertEqual(portrait["investment"]["score"],
+                         round(sum(item["value"] * item["weight"] for item in parts
+                                   if item["value"] is not None) / weight))
+        # 薄弱点按错误率排序，不看错题次数
+        self.assertEqual(portrait["weak_points"][0]["name"], "指针")
+        self.assertEqual(portrait["weak_points"][0]["rate"], 50)
+        self.assertEqual(portrait["review_load"],
+                         {"due": 1, "unresolved": 1, "mastered": 1, "hard": 1, "next7": 0, "avg_ease": 2.2})
+        self.assertEqual(len(portrait["dimensions"]), 5)
+        self.assertIn("本周完成率", portrait["headline"])
+        # 没有任何数据时不把"没开始"当"表现差"：缺分母的分量留空且不计权重
+        empty = portrait_payload({"submissions": [], "wrong_questions": [], "learning_events": []},
+                                 {"id": "s9", "name": "新生"}, None, now)
+        self.assertEqual(empty["investment"]["parts"][2]["value"], None)
+        self.assertEqual(empty["investment"]["parts"][3]["value"], None)
+        self.assertEqual(empty["investment"]["score"], 0)
+        self.assertEqual(empty["review_load"]["unresolved"], 0)
+        self.assertIn("还没有正式练习记录", empty["headline"])
+        # 接口：学生可读自己的画像，教师不可读
+        live = self.json_request("/api/student/portrait", account=DEMO_STUDENT)
+        self.assertEqual(len(live["investment"]["parts"]), 4)
+        self.assertEqual(len(live["dimensions"]), 5)
+        self.assertEqual(live["identity"]["student_id"], DEMO_STUDENT)
+        self.assertIn("events", live)
+        self.assertTrue(live["scope"])
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request("/api/student/portrait", account=DEMO_TEACHER)
+        self.assertEqual(caught.exception.code, 403)
+
+    def test_22_portrait_categories_rhythm_schedule_and_reading(self):
+        """画像扩展：八个平行类别、学习节律、知识点遗忘曲线调度、计划达成与资料阅读。"""
+        from datetime import datetime, timezone
+        from demo.app import (KNOWLEDGE_INTERVALS, READING_THRESHOLD, knowledge_schedule,
+                              portrait_payload, rhythm_payload)
+        now = datetime(2026, 11, 16, 8, 0, tzinfo=timezone.utc)
+        seeded = {
+            "submissions": [
+                {"student_id": "s1", "submitted_at": "2026-11-14T02:00:00+00:00", "score": 60,
+                 "details": [{"knowledge_point_name": "指针", "correct": False},
+                             {"knowledge_point_name": "数组", "correct": False},
+                             {"knowledge_point_name": "循环", "correct": True}]},
+                {"student_id": "s1", "submitted_at": "2026-11-15T02:00:00+00:00", "score": 70,
+                 "late": True,
+                 "details": [{"knowledge_point_name": "指针", "correct": False},
+                             {"knowledge_point_name": "数组", "correct": True},
+                             {"knowledge_point_name": "循环", "correct": True}]},
+                {"student_id": "s1", "submitted_at": "2026-11-16T02:00:00+00:00", "score": 90,
+                 "details": [{"knowledge_point_name": "指针", "correct": True},
+                             {"knowledge_point_name": "数组", "correct": True},
+                             {"knowledge_point_name": "循环", "correct": True}]},
+            ],
+            "learning_events": [
+                {"student_id": "s1", "type": "practice_submit", "ts": "2026-11-16T02:00:00+00:00"},
+                {"student_id": "s1", "type": "review", "ts": "2026-11-16T03:00:00+00:00"},
+                {"student_id": "s1", "type": "live_answer", "ts": "2026-11-16T06:00:00+00:00"},
+            ],
+            "study_activity": {"s1": {"2026-11-16": {"submissions": 1, "reviews": 0},
+                                      "2026-11-15": {"submissions": 2, "reviews": 3},
+                                      "2026-11-10": {"submissions": 3, "reviews": 5}}},
+            "study_plans": {"s1": {"weekly_submissions": 4, "weekly_reviews": 8}},
+            "reading_progress": {"s1": {"r1": {"percent": 80, "name": "课件 A",
+                                              "updated_at": "2026-11-16T01:00:00+00:00"}}},
+        }
+        courses = [{"id": "c1", "resources": [{"id": "r1", "name": "课件 A", "content": "正文"},
+                                             {"id": "r2", "name": "讲义 B", "content": "正文"}]}]
+        portrait = portrait_payload(seeded, {"id": "s1", "name": "演示学生"},
+                                    {"average_score": 73}, now, courses=courses)
+        # 平行类别：八个，互不嵌套
+        self.assertEqual([item["id"] for item in portrait["categories"]],
+                         ["score", "knowledge", "investment", "rhythm", "review", "meta",
+                          "reading", "live"])
+        self.assertEqual(len(portrait["categories"]), 8)
+        # 知识点调度：连续答对次数决定档位，正确率低的知识点退回上一档
+        points = {item["name"]: item for item in portrait["knowledge_points"]}
+        self.assertEqual(points["循环"]["streak"], 3)
+        self.assertEqual(points["循环"]["interval_days"], KNOWLEDGE_INTERVALS[2])
+        self.assertEqual(points["循环"]["accuracy"], 100)
+        self.assertTrue(points["循环"]["mastered"])
+        # 指针 1 对 2 错：streak 只有 1，且正确率 33% 不能升档
+        self.assertEqual(points["指针"]["streak"], 1)
+        self.assertEqual(points["指针"]["interval_days"], KNOWLEDGE_INTERVALS[0])
+        self.assertEqual(points["指针"]["accuracy"], 33)
+        self.assertFalse(points["指针"]["mastered"])
+        # 下次复习时间由"最后作答 + 间隔"现算：指针最后作答 11-16，间隔 2 天
+        self.assertEqual(points["指针"]["next_review_at"][:10], "2026-11-18")
+        self.assertFalse(points["指针"]["due"])
+        # 节律：本地时区（UTC+8）下 02/03/06 点都是上午，周末占比 0
+        rhythm = portrait["rhythm"]
+        self.assertEqual(rhythm["peak"], "上午 6–12")
+        self.assertEqual(rhythm["label"], "上午型")
+        self.assertEqual(rhythm["weekend_ratio"], 0)
+        self.assertEqual(rhythm["late_count"], 1)
+        self.assertEqual(rhythm["late_ratio"], 33)
+        # 计划达成：本周进行中只报进度，已结束周才判达标
+        meta = portrait["metacognition"]
+        self.assertEqual(meta["current_rate"], 12)          # (1/4 + 0/8) / 2
+        self.assertEqual(meta["closed_count"], 3)
+        self.assertEqual(meta["met_count"], 1)              # 上周 5 练 / 8 复达标
+        self.assertTrue(meta["weeks"][1]["met"])
+        self.assertFalse(meta["weeks"][0]["finished"])
+        # 资料阅读：两份里读到 60% 以上的一份
+        self.assertEqual(portrait["reading"]["total"], 2)
+        self.assertEqual(portrait["reading"]["done"], 1)
+        self.assertEqual(portrait["reading"]["percent"], 50)
+        self.assertEqual(portrait["reading"]["recent"][0]["name"], "课件 A")
+        # 节律单独校验：全在工作日深夜学的人判"夜间型"
+        night = [{"ts": "2026-11-16T14:00:00+00:00"}, {"ts": "2026-11-18T15:00:00+00:00"},
+                 {"ts": "2026-11-19T16:30:00+00:00"}]
+        payload = rhythm_payload(night, [], now)
+        self.assertEqual(payload["peak"], "夜间 18–24")
+        self.assertEqual(payload["label"], "夜间型")
+        self.assertEqual(payload["windows"]["夜间 18–24"], 2)
+        # 本地 2026-11-20 00:30 已跨日，归入"深夜 0–6"
+        self.assertEqual(payload["windows"]["深夜 0–6"], 1)
+        # 没有事件时不给结论，也不把 0 当"参与率低"
+        blank = rhythm_payload([], [], now)
+        self.assertIsNone(blank["weekend_ratio"])
+        self.assertIn("还没有足够活动", blank["label"])
+        # 知识点调度对空提交不报错
+        self.assertEqual(knowledge_schedule([], now), [])
+
+        # 接口：上报阅读进度只升不降，跨过阈值才记事件
+        course = self.json_request("/api/courses", {"title": "阅读进度测试课程", "description": "验证资料阅读"})
+        cid = course["id"]
+        resource = self.json_request(f"/api/courses/{cid}/resources",
+                                     {"name": "第一章讲义", "kind": "图文讲义", "content": "正文"})
+        rid = resource["resources"][0]["id"]
+        self.json_request(f"/api/courses/{cid}/questions",
+                          {"text": "发布前需要有题目", "options": ["对", "错"], "answer": 0})
+        self.json_request(f"/api/courses/{cid}/publish", {})
+        first = self.json_request(f"/api/courses/{cid}/resources/{rid}/reading", {"percent": 30},
+                                  account=DEMO_STUDENT)
+        self.assertEqual(first["percent"], 30)
+        self.assertFalse(first["recorded"])
+        second = self.json_request(f"/api/courses/{cid}/resources/{rid}/reading", {"percent": 75},
+                                   account=DEMO_STUDENT)
+        self.assertEqual(second["percent"], 75)
+        self.assertTrue(second["recorded"])
+        self.assertEqual(second["threshold"], READING_THRESHOLD)
+        # 回退上报不改变已达成进度
+        back = self.json_request(f"/api/courses/{cid}/resources/{rid}/reading", {"percent": 40},
+                                account=DEMO_STUDENT)
+        self.assertEqual(back["percent"], 75)
+        # 越界进度直接报错
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/courses/{cid}/resources/{rid}/reading", {"percent": 150},
+                              account=DEMO_STUDENT)
+        self.assertEqual(caught.exception.code, 400)
+        # 教师不能上报学生的阅读进度
+        with self.assertRaises(HTTPError) as caught:
+            self.json_request(f"/api/courses/{cid}/resources/{rid}/reading", {"percent": 60},
+                              account=DEMO_TEACHER)
+        self.assertEqual(caught.exception.code, 403)
+        live = self.json_request("/api/student/portrait", account=DEMO_STUDENT)
+        self.assertEqual(len(live["categories"]), 8)
+        self.assertIn("resource_read", {item["type"] for item in live["events"]["by_type"]})
+        self.assertIn("knowledge_points", live)
+        self.assertIn("metacognition", live)
+        self.assertIn("rhythm", live)
+
+
 if __name__ == "__main__":
     unittest.main()

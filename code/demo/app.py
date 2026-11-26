@@ -17,6 +17,7 @@ import secrets
 import shutil
 import threading
 import uuid
+from collections import Counter
 from urllib.parse import quote, unquote, urlparse
 from html import escape
 
@@ -162,6 +163,20 @@ STUDY_ACHIEVEMENTS = [
 ]
 WEEKDAY_LABELS = "日一二三四五六"
 
+# 学习事件：一行一个动作，是打卡、画像与复习的共同事实来源。
+# 打卡的两类（练习提交 / 错题复习）由事件派生，保证"日计数"与"明细"永远一致。
+EVENT_KINDS = ("practice_submit", "code_submit", "review", "live_answer",
+               "ai_question_add", "video_watch", "resource_read")
+EVENT_CHECKIN = {"practice_submit": "submissions", "code_submit": "submissions", "review": "reviews"}
+EVENT_LABELS = {"practice_submit": "练习提交", "code_submit": "编程题提交", "review": "错题复习",
+                "live_answer": "课堂抢答", "ai_question_add": "加入 AI 题", "video_watch": "视频学习",
+                "resource_read": "资料阅读"}
+
+# 学习资料读到 60% 才记一次阅读：进度条过半不等于学过，避免"点开就打卡"。
+READING_THRESHOLD = 60
+# 知识点级复习沿用题目级 SM-2 的间隔序列（天），只是没有独立 EF，用正确率修正档位。
+KNOWLEDGE_INTERVALS = (2, 6, 15, 38, 95)
+
 
 def local_day(value=None) -> date:
     """UTC 时间（ISO 字符串 / datetime / 空）转本地日期，让打卡按“本地日”归档。"""
@@ -190,6 +205,32 @@ def activity_days(data, student_id) -> dict:
     return dict((data.get("study_activity") or {}).get(student_id) or {})
 
 
+def record_event(data, student_id, kind, moment=None, *, course_id=None, ref_id=None,
+                 correct=None, duration_seconds=0, source="course"):
+    """追加一条学习事件（只增不改），并同步打卡计数，返回写入的事件本身。
+
+    事件是明细，study_activity 是它的日聚合视图：两者同一次写入，避免"画像有、
+    打卡没有"这类口径分裂。
+    """
+    if kind not in EVENT_KINDS:
+        raise ValueError(f"unknown event kind: {kind}")
+    if moment is None:
+        stamp = datetime.now(timezone.utc).isoformat()
+    elif isinstance(moment, datetime):
+        stamp = moment.isoformat()
+    else:
+        stamp = str(moment)
+    event = {"id": uuid.uuid4().hex[:12], "ts": stamp, "student_id": student_id,
+             "course_id": course_id, "type": kind, "ref_id": ref_id,
+             "correct": correct, "duration_seconds": int(duration_seconds or 0),
+             "source": source}
+    data.setdefault("learning_events", []).append(event)
+    checkin = EVENT_CHECKIN.get(kind)
+    if checkin:
+        bump_study_activity(data, student_id, checkin, stamp)
+    return event
+
+
 def study_streak(days: dict, today: date) -> tuple[int, int]:
     """返回 (当前连续天数, 历史最长连续天数)。
 
@@ -215,6 +256,332 @@ def study_streak(days: dict, today: date) -> tuple[int, int]:
 def plan_rate(value: int, goal: int) -> int:
     """目标完成率，封顶 100；目标为 0 时视为未设置。"""
     return min(100, round(value / goal * 100)) if goal else 0
+
+
+def _local_moment(value):
+    """ISO 时间戳 → 本地时区 datetime；解析不了返回 None。"""
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(str(value))
+    except ValueError:
+        return None
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone()
+
+
+def knowledge_schedule(submissions, moment=None):
+    """知识点级复习调度：把题目级 SM-2 的间隔序列上移到知识点。
+
+    与题目级一致：间隔按"连续答对次数"走 2/6/15/38/95 天，封顶 SM2_MAX_INTERVAL。
+    与题目级不同：知识点没有自己的 EF，用该点正确率近似记忆强度——低于 50% 时退回上一档，
+    这样"反复错的知识点"不会因为偶然答对一次就被排到 95 天以后。
+    """
+    now = moment or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    now_stamp = now.isoformat()
+    points = {}
+    for record in sorted(submissions, key=lambda item: item.get("submitted_at") or ""):
+        stamp = record.get("submitted_at") or ""
+        for detail in record.get("details") or []:
+            name = detail.get("knowledge_point_name") or "未分类"
+            if name == "未分类":
+                continue  # 没有知识点的题无法排进复习，不占位
+            key = detail.get("knowledge_point_id") or name
+            entry = points.setdefault(key, {"id": key, "name": name, "answered": 0,
+                                            "correct": 0, "streak": 0, "last_seen": stamp})
+            entry["answered"] += 1
+            if detail.get("correct"):
+                entry["correct"] += 1
+                entry["streak"] += 1
+            else:
+                entry["streak"] = 0
+            if stamp > entry["last_seen"]:
+                entry["last_seen"] = stamp
+    rows = []
+    for entry in points.values():
+        accuracy = round(entry["correct"] / entry["answered"] * 100) if entry["answered"] else 0
+        stage = min(len(KNOWLEDGE_INTERVALS) - 1, max(0, entry["streak"] - 1))
+        interval = 1 if entry["streak"] == 0 else KNOWLEDGE_INTERVALS[stage]
+        if entry["streak"] and accuracy < 50 and stage > 0:
+            interval = KNOWLEDGE_INTERVALS[stage - 1]
+        seen = _local_moment(entry["last_seen"]) or now
+        next_at = (seen + timedelta(days=interval)).isoformat()
+        rows.append({"id": entry["id"], "name": entry["name"], "answered": entry["answered"],
+                     "wrong": entry["answered"] - entry["correct"], "accuracy": accuracy,
+                     "streak": entry["streak"], "interval_days": interval,
+                     "next_review_at": next_at, "due": next_at <= now_stamp,
+                     "mastered": accuracy >= 80 and entry["streak"] >= 3})
+    rows.sort(key=lambda item: (not item["due"], -item["wrong"], item["next_review_at"]))
+    return rows
+
+
+def rhythm_payload(events, submissions, moment=None):
+    """学习节律：从事件时间戳看"几点在学"，再从迟交记录看"是否赶截止"。"""
+    now = moment or datetime.now(timezone.utc)
+    hours = Counter()
+    weekend = 0
+    dated = 0
+    for item in events:
+        seen = _local_moment(item.get("ts"))
+        if not seen:
+            continue
+        dated += 1
+        hours[seen.hour] += 1
+        if seen.weekday() >= 5:
+            weekend += 1
+    windows = {"深夜 0–6": 0, "上午 6–12": 0, "下午 12–18": 0, "夜间 18–24": 0}
+    for hour, count in hours.items():
+        slot = ("深夜 0–6" if hour < 6 else "上午 6–12" if hour < 12
+                else "下午 12–18" if hour < 18 else "夜间 18–24")
+        windows[slot] += count
+    weekend_ratio = round(weekend / dated * 100) if dated else None
+    late_count = sum(1 for item in submissions if item.get("late"))
+    late_ratio = round(late_count / len(submissions) * 100) if submissions else None
+    peak = max(windows, key=windows.get) if dated else None
+    peak_share = round(windows[peak] / dated * 100) if dated else None
+    if not dated:
+        label = "还没有足够活动判断节律"
+    elif weekend_ratio >= 40:
+        label = "周末集中型"
+    elif peak in {"深夜 0–6", "夜间 18–24"} and peak_share >= 35:
+        label = "夜间型"
+    elif peak == "上午 6–12" and peak_share >= 40:
+        label = "上午型"
+    elif peak == "下午 12–18" and peak_share >= 40:
+        label = "下午型"
+    else:
+        label = "分散型"
+    return {"label": label, "windows": windows, "peak": peak, "peak_share": peak_share,
+            "weekend_ratio": weekend_ratio, "late_ratio": late_ratio,
+            "late_count": late_count, "dated_events": dated}
+
+
+def plan_progress(days, goals, today, weeks=4):
+    """元认知里的"计划达成"：按自然周回看，两项目标都完成才算达标一周。
+
+    本周还没结束，只报进度不判"未达成"，否则周一看画像就是"失败"。
+    """
+    rows = []
+    for offset in range(weeks):
+        start = today - timedelta(days=today.weekday()) - timedelta(days=7 * offset)
+        entries = [days.get((start + timedelta(days=index)).isoformat()) or {} for index in range(7)]
+        subs = sum(int(item.get("submissions", 0)) for item in entries)
+        revs = sum(int(item.get("reviews", 0)) for item in entries)
+        rate = round((plan_rate(subs, goals["weekly_submissions"]) +
+                      plan_rate(revs, goals["weekly_reviews"])) / 2)
+        finished = offset > 0
+        met = finished and subs >= goals["weekly_submissions"] and revs >= goals["weekly_reviews"]
+        rows.append({"start": start.isoformat(), "end": (start + timedelta(days=6)).isoformat(),
+                     "submissions": subs, "reviews": revs, "rate": rate,
+                     "met": met, "finished": finished, "current": offset == 0})
+    closed = [item for item in rows if item["finished"]]
+    return {"weeks": rows, "met_count": sum(1 for item in closed if item["met"]),
+            "closed_count": len(closed), "current_rate": rows[0]["rate"]}
+
+
+def reading_payload(data, student_id, courses=None):
+    """学习资料阅读进度：替代视频观看进度，读到 60% 才算读过一份。
+
+    只统计带正文（content）的资料：仅登记了课件的资源没有阅读进度上报点，
+    计入分母会让完成度永远到不了 100%。
+    """
+    table = (data.get("reading_progress") or {}).get(student_id) or {}
+    resources = [item for course in (courses or []) for item in (course.get("resources") or [])
+                 if item.get("content")]
+    names = {item["id"]: item.get("name") for item in resources}
+    done = [key for key, value in table.items() if int(value.get("percent") or 0) >= READING_THRESHOLD]
+    recent = [{"id": key, "name": names.get(key) or value.get("name"),
+               "percent": int(value.get("percent") or 0), "updated_at": value.get("updated_at")}
+              for key, value in sorted(table.items(),
+                                       key=lambda pair: pair[1].get("updated_at") or "", reverse=True)[:4]]
+    return {"total": len(resources), "done": len(done),
+            "percent": round(len(done) / len(resources) * 100) if resources else None,
+            "recent": recent}
+
+
+def portrait_payload(data, student, own_profile=None, moment=None, courses=None):
+    """学生画像：投入度四分量 + 五个维度，全部由学习事件与错题调度现算。
+
+    缺数据的维度返回 None 而不是 0——没有抢答场次不等于"从不参与"。
+    """
+    if moment is None:
+        now = datetime.now(timezone.utc)
+    elif isinstance(moment, datetime):
+        now = moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+    else:
+        now = datetime.fromisoformat(str(moment))
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+    now_stamp = now.isoformat()
+    sid = student["id"]
+    today = local_day(now)
+    events = [item for item in (data.get("learning_events") or []) if item.get("student_id") == sid]
+    days = activity_days(data, sid)
+    saved = (data.get("study_plans") or {}).get(sid) or {}
+    goals = {"weekly_submissions": int(saved.get("weekly_submissions") or STUDY_PLAN_DEFAULT["weekly_submissions"]),
+             "weekly_reviews": int(saved.get("weekly_reviews") or STUDY_PLAN_DEFAULT["weekly_reviews"])}
+    week_start = today - timedelta(days=today.weekday())
+    week = [week_start + timedelta(days=offset) for offset in range(7)]
+    week_subs = sum(int((days.get(day.isoformat()) or {}).get("submissions", 0)) for day in week)
+    week_revs = sum(int((days.get(day.isoformat()) or {}).get("reviews", 0)) for day in week)
+    active_30 = 0
+    for offset in range(STUDY_CALENDAR_DAYS):
+        entry = days.get((today - timedelta(days=offset)).isoformat()) or {}
+        if entry.get("submissions") or entry.get("reviews"):
+            active_30 += 1
+    streak_current, streak_longest = study_streak(days, today)
+
+    submissions = [item for item in (data.get("submissions") or []) if item.get("student_id") == sid]
+    submissions.sort(key=lambda item: item.get("submitted_at") or "")
+    scores = [int(item.get("score") or 0) for item in submissions]
+    low_scores = sum(1 for value in scores if value < 60)
+
+    answered, wronged = Counter(), Counter()
+    for item in submissions:
+        for detail in item.get("details") or []:
+            point = detail.get("knowledge_point_name") or "未分类"
+            answered[point] += 1
+            if not detail.get("correct"):
+                wronged[point] += 1
+    weak = [{"name": point, "wrong": count, "answered": answered[point],
+             "rate": round(count / answered[point] * 100)}
+            for point, count in wronged.items() if answered[point]]
+    weak.sort(key=lambda item: (-item["rate"], -item["wrong"]))
+    weak = weak[:3]
+    knowledge_rows = knowledge_schedule(submissions, now)
+    due_points = [item for item in knowledge_rows if item["due"]]
+    rhythm = rhythm_payload(events, submissions, now)
+    plan_state = plan_progress(days, goals, today)
+    reading = reading_payload(data, sid, courses)
+
+    wrong_records = [item for item in (data.get("wrong_questions") or []) if item.get("student_id") == sid]
+    unresolved = [item for item in wrong_records if item.get("status") != "mastered"]
+    mastered = len(wrong_records) - len(unresolved)
+    due = [item for item in unresolved if (item.get("next_review_at") or "") <= now_stamp]
+    hard = [item for item in unresolved if int(item.get("wrong_count") or 0) >= 3]
+    ease = [float(item.get("ease_factor") or 0) for item in unresolved if item.get("ease_factor")]
+    cutoff = (now + timedelta(days=7)).isoformat()
+    soon = [item for item in unresolved if now_stamp <= (item.get("next_review_at") or "") <= cutoff]
+
+    quizzes = [item for item in (data.get("live_quizzes") or []) if item.get("status") == "closed"]
+    joined = [item for item in quizzes
+              if any(answer.get("student_id") == sid for answer in item.get("answers") or [])]
+
+    parts = [
+        {"id": "activity", "label": "活跃天数", "weight": 35,
+         "value": round(active_30 / STUDY_CALENDAR_DAYS * 100),
+         "detail": f"近 {STUDY_CALENDAR_DAYS} 天有 {active_30} 天学习"},
+        {"id": "goal", "label": "周目标完成", "weight": 25,
+         "value": round((plan_rate(week_subs, goals["weekly_submissions"]) +
+                         plan_rate(week_revs, goals["weekly_reviews"])) / 2),
+         "detail": f"练习 {week_subs}/{goals['weekly_submissions']} · 复习 {week_revs}/{goals['weekly_reviews']}"},
+        {"id": "review", "label": "复习履约", "weight": 20,
+         "value": round(100 - len(due) / len(unresolved) * 100) if unresolved else None,
+         "detail": f"待复习 {len(unresolved)} 题，其中 {len(due)} 题已逾期" if unresolved else "暂无待复习题目"},
+        {"id": "live", "label": "课堂参与", "weight": 20,
+         "value": round(len(joined) / len(quizzes) * 100) if quizzes else None,
+         "detail": f"已结束 {len(quizzes)} 场，参与 {len(joined)} 场" if quizzes else "暂无已结束的抢答"},
+    ]
+    known = [item for item in parts if item["value"] is not None]
+    weight = sum(item["weight"] for item in known)
+    investment = {"score": round(sum(item["value"] * item["weight"] for item in known) / weight) if weight else None,
+                  "parts": parts}
+
+    dimensions = [
+        {"id": "score", "label": "成绩结果",
+         "value": f"{(own_profile or {}).get('average_score')} 分" if (own_profile or {}).get("average_score") is not None else "暂无",
+         "detail": (f"最近 {len(scores[-5:])} 次：{'、'.join(str(value) for value in scores[-5:])}；低于 60 分 {low_scores} 次"
+                    if scores else "还没有正式提交")},
+        {"id": "knowledge", "label": "知识结构",
+         "value": f"{len(weak)} 个薄弱点" if weak else "暂无",
+         "detail": "、".join(f"{item['name']}（错 {item['wrong']}/{item['answered']}，{item['rate']}%）" for item in weak)
+         or "完成练习后按知识点统计错误率"},
+        {"id": "review", "label": "复习健康度",
+         "value": f"{len(unresolved)} 题待复习",
+         "detail": (f"已掌握 {mastered} 题 · 逾期 {len(due)} 题 · 反复错 {len(hard)} 题"
+                    f" · 平均倍率 {round(sum(ease) / len(ease), 2) if ease else '—'}"
+                    f" · 未来 7 天 {len(soon)} 题")},
+        {"id": "habit", "label": "学习习惯",
+         "value": f"连续 {streak_current} 天",
+         "detail": f"历史最长 {streak_longest} 天 · 近 30 天活跃 {active_30} 天"},
+        {"id": "live", "label": "课堂参与",
+         "value": f"{len(joined)}/{len(quizzes)} 场" if quizzes else "暂无",
+         "detail": "抢答只作参与度参考，不计入课程成绩" if quizzes else "还没有已结束的抢答"},
+    ]
+
+    categories = [
+        {"id": "score", "label": "成绩结果",
+         "value": (f"{(own_profile or {}).get('average_score')} 分"
+                   if (own_profile or {}).get("average_score") is not None else "暂无"),
+         "detail": (f"最近 {len(scores[-5:])} 次：{'、'.join(str(value) for value in scores[-5:])}"
+                    f"；低于 60 分 {low_scores} 次" if scores else "还没有正式提交")},
+        {"id": "knowledge", "label": "知识状态",
+         "value": f"{len(knowledge_rows)} 个知识点" if knowledge_rows else "暂无",
+         "detail": (f"薄弱点 {len(weak)} 个 · 已掌握 {sum(1 for item in knowledge_rows if item['mastered'])} 个"
+                    f" · 待复习 {len(due_points)} 个" if knowledge_rows else "完成练习后按知识点统计")},
+        {"id": "investment", "label": "学习投入",
+         "value": f"{investment['score']} 分" if investment["score"] is not None else "暂无",
+         "detail": (f"活跃 {parts[0]['value']} · 目标 {parts[1]['value']}"
+                    f" · 履约 {parts[2]['value'] if parts[2]['value'] is not None else '—'}"
+                    f" · 课堂 {parts[3]['value'] if parts[3]['value'] is not None else '—'}")},
+        {"id": "rhythm", "label": "学习节律",
+         "value": rhythm["label"],
+         "detail": (f"常学时段 {rhythm['peak']}（占 {rhythm['peak_share']}%）"
+                    f" · 周末 {rhythm['weekend_ratio']}% · 迟交 {rhythm['late_count']} 次"
+                    if rhythm["dated_events"] else "开始学习后自动统计时段偏好")},
+        {"id": "review", "label": "复习健康",
+         "value": f"{len(unresolved)} 题待复习",
+         "detail": (f"已掌握 {mastered} 题 · 逾期 {len(due)} 题 · 反复错 {len(hard)} 题"
+                    f" · 平均倍率 {round(sum(ease) / len(ease), 2) if ease else '—'}")},
+        {"id": "meta", "label": "元认知与计划",
+         "value": f"本周 {plan_state['current_rate']}%",
+         "detail": (f"已结束 {plan_state['closed_count']} 周中达标 {plan_state['met_count']} 周"
+                    f" · 目标 {goals['weekly_submissions']} 次练习 / {goals['weekly_reviews']} 次复习")},
+        {"id": "reading", "label": "资料阅读",
+         "value": (f"{reading['done']}/{reading['total']} 份" if reading["total"] else "暂无资料"),
+         "detail": (f"读到 {READING_THRESHOLD}% 才算读过 · 完成度 {reading['percent']}%"
+                    if reading["total"] else "课程发布学习资料后开始统计")},
+        {"id": "live", "label": "课堂参与",
+         "value": f"{len(joined)}/{len(quizzes)} 场" if quizzes else "暂无",
+         "detail": "抢答只作参与度参考，不计入课程成绩" if quizzes else "还没有已结束的抢答"},
+    ]
+
+    if not submissions:
+        headline = "还没有正式练习记录。完成一份练习后，画像会从提交、复习和课堂互动一起长出来。"
+    else:
+        headline = f"本周完成率 {parts[1]['value']}%，{len(unresolved)} 题待复习（{len(due)} 题已逾期）"
+        if weak:
+            headline += f"，薄弱点在{'、'.join(item['name'] for item in weak[:2])}"
+        headline += "。"
+
+    last7 = [item for item in events if (item.get("ts") or "") >= (now - timedelta(days=7)).isoformat()]
+    kinds = Counter(item.get("type") for item in events)
+    return {
+        "identity": {"student_id": sid, "name": student["name"], "major_id": student.get("major_id")},
+        "headline": headline,
+        "investment": investment,
+        "dimensions": dimensions,
+        "weak_points": weak,
+        "categories": categories,
+        "knowledge_points": knowledge_rows[:6],
+        "rhythm": rhythm,
+        "metacognition": {"current_rate": plan_state["current_rate"],
+                          "met_count": plan_state["met_count"],
+                          "closed_count": plan_state["closed_count"],
+                          "goals": goals, "weeks": plan_state["weeks"]},
+        "reading": reading,
+        "review_load": {"due": len(due), "unresolved": len(unresolved), "mastered": mastered,
+                        "hard": len(hard), "next7": len(soon),
+                        "avg_ease": round(sum(ease) / len(ease), 2) if ease else None},
+        "events": {"total": len(events), "last7": len(last7),
+                   "by_type": [{"type": kind, "label": EVENT_LABELS.get(kind, kind), "count": count}
+                               for kind, count in kinds.most_common()]},
+        "scope": ("只统计正式练习提交、错题复习、已结束的课堂抢答与学习资料阅读"
+                  f"（读到 {READING_THRESHOLD}%）；打开页面本身不计入"),
+    }
 
 
 def _parse_datetime(value, label="时间"):
@@ -479,6 +846,35 @@ class LearningStore:
                 if record.get("review_count") and record.get("last_reviewed_at"):
                     bump_study_activity(self.data, record["student_id"], "reviews", record["last_reviewed_at"])
             self.data["study_activity_version"] = 1
+        # 学习事件首次回填：从历史提交、错题复习与抢答重建明细，之后由写入点追加。
+        if self.data.get("learning_events_version") != 1:
+            events = []
+            for record in self.data["submissions"]:
+                if not record.get("submitted_at"):
+                    continue
+                events.append({"id": uuid.uuid4().hex[:12], "ts": record["submitted_at"],
+                               "student_id": record.get("student_id"), "course_id": record.get("course_id"),
+                               "type": "code_submit" if record.get("type") == "python" else "practice_submit",
+                               "ref_id": record.get("id"), "correct": None,
+                               "duration_seconds": int(record.get("duration_seconds") or 0),
+                               "source": "course"})
+            for record in self.data.setdefault("wrong_questions", []):
+                if record.get("review_count") and record.get("last_reviewed_at"):
+                    events.append({"id": uuid.uuid4().hex[:12], "ts": record["last_reviewed_at"],
+                                   "student_id": record.get("student_id"), "course_id": record.get("course_id"),
+                                   "type": "review", "ref_id": record.get("id"), "correct": None,
+                                   "duration_seconds": 0, "source": "course"})
+            for quiz in self.data.get("live_quizzes") or []:
+                for answer in quiz.get("answers") or []:
+                    events.append({"id": uuid.uuid4().hex[:12], "ts": answer.get("submitted_at"),
+                                   "student_id": answer.get("student_id"), "course_id": quiz.get("course_id"),
+                                   "type": "live_answer", "ref_id": quiz.get("id"),
+                                   "correct": answer.get("correct"),
+                                   "duration_seconds": int((answer.get("latency_ms") or 0) / 1000),
+                                   "source": "live"})
+            self.data["learning_events"] = sorted(events, key=lambda item: item["ts"] or "")
+            self.data["learning_events_version"] = 1
+            migrated = True
             migrated = True
         if upgrade_catalog(self.data):
             migrated = True
@@ -1088,6 +1484,43 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             request.app.state.learning.save()
         return request.app.state.learning.public_course(course, include_answers=True)
 
+    @app.post("/api/courses/{course_id}/resources/{resource_id}/reading")
+    async def report_resource_reading(request: Request, course_id: str, resource_id: str):
+        """学生上报资料阅读进度：只升不降；首次读到 60% 时补一条资料阅读事件。"""
+        student = require_role(request, "student")
+        store = request.app.state.learning
+        payload = await json_object(request)
+        percent = payload.get("percent")
+        if (isinstance(percent, bool) or not isinstance(percent, (int, float))
+                or not 0 <= float(percent) <= 100):
+            raise HTTPException(400, "阅读进度需为 0 到 100 之间的数字")
+        with store.lock:
+            course = next((item for item in store.data["courses"] if item["id"] == course_id), None)
+            if not course or course.get("status") != "published" or not accepts_student(course, student):
+                raise HTTPException(404, "课程不存在或尚未发布")
+            resource = next((item for item in course.get("resources") or []
+                             if item["id"] == resource_id), None)
+            if not resource:
+                raise HTTPException(404, "资源不存在")
+            table = store.data.setdefault("reading_progress", {}).setdefault(student["id"], {})
+            entry = table.setdefault(resource_id, {"percent": 0, "course_id": course_id,
+                                                   "name": resource.get("name"),
+                                                   "first_at": None, "updated_at": None})
+            entry["percent"] = max(int(entry.get("percent") or 0), int(round(float(percent))))
+            entry["course_id"] = course_id
+            entry["name"] = resource.get("name")
+            entry["updated_at"] = LearningStore.now()
+            if entry.get("first_at") is None and entry["percent"] > 0:
+                entry["first_at"] = entry["updated_at"]
+            if entry["percent"] >= READING_THRESHOLD and not entry.get("recorded"):
+                entry["recorded"] = True
+                record_event(store.data, student["id"], "resource_read", LearningStore.now(),
+                             course_id=course_id, ref_id=resource_id, source="course")
+            store.save()
+            result = {"resource_id": resource_id, "percent": entry["percent"],
+                      "recorded": bool(entry.get("recorded")), "threshold": READING_THRESHOLD}
+        return result
+
     @app.post("/api/courses/{course_id}/questions")
     async def add_question(request: Request, course_id: str):
         course = editable_course(request, course_id)
@@ -1611,7 +2044,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 attempt["status"] = "submitted"
                 attempt["submitted_at"] = submission["submitted_at"]
                 attempt["submission_id"] = submission["id"]
-            bump_study_activity(store.data, user["id"], "submissions", submission["submitted_at"])
+            record_event(store.data, user["id"],
+                         "code_submit" if submission.get("type") == "python" else "practice_submit",
+                         submission["submitted_at"], course_id=course_id, ref_id=submission["id"],
+                         duration_seconds=submission.get("duration_seconds", 0), source="course")
             store.save()
         return _student_record_view(submission, {item["id"]: item for item in store.data.get("assignments", [])}, store.data["submissions"])
 
@@ -2371,7 +2807,15 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         if is_teacher:
             raise HTTPException(403, "教师端不能替学生作答")
         try:
-            request.app.state.live.answer(quiz, viewer, payload.get("selected"))
+            entry = request.app.state.live.answer(quiz, viewer, payload.get("selected"))
+            store = request.app.state.learning
+            with store.lock:
+                record_event(store.data, viewer["id"], "live_answer", entry.get("submitted_at"),
+                             course_id=quiz.get("course_id"), ref_id=quiz.get("id"),
+                             correct=entry.get("correct"),
+                             duration_seconds=int((entry.get("latency_ms") or 0) / 1000),
+                             source="live")
+                store.save()
         except LiveQuizError as error:
             raise HTTPException(error.status_code, error.message) from None
         return request.app.state.live.student_view(quiz, viewer)
@@ -2444,6 +2888,25 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                        "course_participation": 0, "practice_activity": 0, "mastery_score": 0,
                        "needs_attention": False, "not_started": True}
             return {"profile": own, "scope": "本人可学习及已参与课程；仅统计正式练习提交，复习不计分"}
+
+    @app.get("/api/student/portrait")
+    async def student_portrait(request: Request):
+        """学生画像：投入度四分量与五个维度，全部由学习事件与错题调度现算。"""
+        student = require_role(request, "student")
+        store = request.app.state.learning
+        students = request.app.state.accounts.students()
+        with store.lock:
+            history = {record["course_id"] for record in store.data["submissions"]
+                       if record["student_id"] == student["id"]}
+            courses = [course for course in store.data["courses"]
+                       if (course["status"] == "published" and accepts_student(course, student))
+                       or course["id"] in history]
+            assignments = {item["id"]: item for item in store.data.get("assignments", [])}
+            visible = [_student_record_view(record, assignments, store.data["submissions"])
+                       for record in store.data["submissions"]]
+            own = next((item for item in build_profiles(courses, visible, students)
+                        if item["student_id"] == student["id"]), None)
+            return portrait_payload(store.data, student, own, courses=courses)
 
     def study_plan_payload(store, student):
         """学习计划与打卡：本周目标完成度、今日任务、连续天数、30 天打卡与成就。"""
@@ -2675,7 +3138,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 record["review_interval_days"] = 1
                 record["next_review_at"] = _days_later(1)
                 record["status"] = "unresolved"
-            bump_study_activity(store.data, user["id"], "reviews", now)
+            record_event(store.data, user["id"], "review", now, course_id=record.get("course_id"),
+                         ref_id=record.get("id"), correct=correct, source="course")
             store.save()
             return {**dict(record), "correct": correct, "answer": answer}
     @app.get("/api/jobs")
@@ -2872,6 +3336,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                       "added_at":now, "wrong_count":0, "first_wrong_at":None, "last_wrong_at":None,
                       "status":"unresolved", "review_interval_days":1, "next_review_at":now, "review_count":0,
                       "ease_factor":2.5, "correct_streak":0}
+            record_event(store.data, user["id"], "ai_question_add", now,
+                         course_id=record["course_id"], ref_id=record["question_id"], source="ai")
             records.append(record)
             try:
                 store.save()

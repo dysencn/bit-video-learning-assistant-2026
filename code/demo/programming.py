@@ -295,6 +295,15 @@ class ProgrammingManager:
                     except Exception:
                         self.store.data["submissions"].remove(record)
                         raise
+                try:
+                    from .app import record_event as _record_event
+                    with self.store.lock:
+                        _record_event(self.store.data, user["id"], "code_submit", record["submitted_at"],
+                                      course_id=course["id"], ref_id=record["id"], source="course")
+                        self.store.save()
+                except Exception:
+                    # 事件写入失败不影响判题结果，提交记录已在上面保存。
+                    pass
                 with self.lock: run["submission_id"] = record["id"]
             with self.lock: run.update(score=score, passed=passed)
         except Exception:

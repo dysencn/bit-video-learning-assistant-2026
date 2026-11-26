@@ -811,7 +811,7 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(portrait["review_load"],
                          {"due": 1, "unresolved": 1, "mastered": 1, "hard": 1, "next7": 0, "avg_ease": 2.2})
         self.assertEqual(len(portrait["dimensions"]), 5)
-        self.assertIn("本周完成率", portrait["headline"])
+        self.assertIn("本周计划完成率", portrait["headline"])
         # 没有任何数据时不把"没开始"当"表现差"：缺分母的分量留空且不计权重
         empty = portrait_payload({"submissions": [], "wrong_questions": [], "learning_events": []},
                                  {"id": "s9", "name": "新生"}, None, now)
@@ -1098,9 +1098,12 @@ class DemoIntegrationTest(unittest.TestCase):
             self.assertEqual(row["total"], 0)
             self.assertEqual(row["minutes"], 0)
         for row in week["days"]:
-            self.assertLessEqual(row["counts"]["counts"]["review"], 4)
+            self.assertLessEqual(row["counts"]["review"], 4)
+            # counts 必须是纯数字；早期版本误把整个包装对象塞进来，前端只能读到空列表
+            for kind in ("resource", "knowledge", "practice", "code", "review"):
+                self.assertIsInstance(row["counts"][kind], int)
         self.assertEqual(week["summary"]["counts"]["review"],
-                         sum(row["counts"]["counts"]["review"] for row in week["days"]))
+                         sum(row["counts"]["review"] for row in week["days"]))
         self.assertEqual(week["progress"]["planned"],
                          sum(row["total"] for row in week["days"] if row["date"] <= today))
         self.assertEqual(week["progress"]["rate"],

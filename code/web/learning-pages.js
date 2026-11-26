@@ -40,20 +40,6 @@ export async function analyticsPage(ctx) {
   root.querySelector("#refresh").onclick = () => analyticsPage(ctx).catch(error => tell(error.message));
 }
 
-export async function personalProfilePage(ctx) {
-  const {api, layout, root, tell, link, majorName} = ctx;
-  const [data, portrait] = await Promise.all([api("/api/student/profile"), api("/api/student/portrait").catch(() => null)]);
-  const student = data.profile;
-  const parts = portrait?.investment?.parts || [];
-  const investmentBlock = portrait?.investment ? `<section class="portrait-card"><div class="portrait-head"><div><span class="eyebrow">LEARNING INVESTMENT</span><h2>投入度 ${portrait.investment.score === null ? "暂无" : portrait.investment.score}</h2><p class="muted">${esc(portrait.headline)}</p></div><span class="tag published">四分量加权</span></div><div class="investment-bars">${parts.map(item => `<div class="investment-row"><span class="investment-label">${esc(item.label)}<small>权重 ${item.weight}%</small></span><progress class="investment-track" max="100" value="${item.value ?? 0}" aria-label="${esc(item.label)} ${item.value ?? 0}%"></progress><span class="investment-value">${item.value === null ? "暂无" : item.value}</span><small class="muted">${esc(item.detail)}</small></div>`).join("")}</div><small class="muted">缺失的分量不计入权重，不把「没有数据」当成「表现差」。</small></section>` : "";
-  const dims = portrait?.categories || portrait?.dimensions || [];
-  const dimBlock = dims.length ? `<section><div class="section-title"><div><span class="eyebrow">FIVE DIMENSIONS</span><h2>五个维度</h2></div><span class="muted">全部由学习事件现算</span></div><div class="portrait-grid">${dims.map(item => `<article class="portrait-dim"><span class="eyebrow">${esc(item.id)}</span><b>${esc(item.label)}</b><h3>${esc(item.value)}</h3><p class="muted">${esc(item.detail)}</p></article>`).join("")}</div></section>` : "";
-  const sources = portrait?.events || null;
-  const sourceBlock = sources ? `<section><div class="section-title"><div><span class="eyebrow">DATA SOURCE</span><h2>画像的数据从哪来</h2><p class="muted">提交、复习、抢答、AI 加题写进同一条事件流水，画像再从流水聚合。</p></div><span class="muted">近 7 天 ${sources.last7} 条 · 累计 ${sources.total} 条</span></div><div class="event-chips">${sources.by_type.length ? sources.by_type.map(item => `<span class="event-chip">${esc(item.label)}<b>${item.count}</b></span>`).join("") : '<span class="muted">还没有事件记录</span>'}</div></section>` : "";
-  layout(`<div class="page-heading"><div><span class="eyebrow">MY LEARNING PROFILE</span><h1>让进步，有迹可循</h1><p class="muted">${esc(majorName(student.major_id))} · 你的画像仅对本人和有权查看相应课程的教师开放。</p></div><button class="ghost" id="refresh">${icon("refresh")}刷新画像</button></div><section class="personal-profile">${radarCard(student, true)}</section>${investmentBlock}${dimBlock}${sourceBlock}<div class="profile-followup"><div>${icon("target")}<h2>下一步，从薄弱点开始</h2><p class="muted">${student.weak_points.length ? `优先复习 ${esc(student.weak_points.join("、"))}，再回到课程完成一次练习。` : "从一份章节练习开始积累数据，逐步了解自己的学习状态。"}</p></div><div class="actions">${link("review-center", "打开错题与复习", "primary")}${link("dashboard", "继续课程学习")}</div></div>`, "我的学习画像");
-  root.querySelector("#refresh").onclick = () => personalProfilePage(ctx).catch(error => tell(error.message));
-}
-
 export async function reviewCenter(ctx, initialTab) {
   const {api, post, layout, root, tell, link, fileUrl} = ctx;
   if (initialTab) reviewState.tab = initialTab;

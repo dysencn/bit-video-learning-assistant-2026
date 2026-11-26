@@ -529,13 +529,13 @@ def plan_week_calendar(week, days, parsed, data, student):
         if entry is None:
             rows.append({"date": one_day.isoformat(), "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
                          "rest": one_day.weekday() not in allowed, "minutes": 0,
-                         "counts": plan_item_counts([]), "total": 0, "done": 0, "items": []})
+                         "counts": plan_item_counts([])["counts"], "total": 0, "done": 0, "items": []})
             continue
         activity = plan_day_activity(data, student, one_day)
         view = [{**card, "id": f"{card['kind']}:{card['ref_id']}", "done": plan_task_done(card, activity)}
                 for card in entry["items"]]
         rows.append({"date": one_day.isoformat(), "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
-                     "rest": False, "minutes": entry["counts"]["minutes"], "counts": entry["counts"],
+                     "rest": False, "minutes": entry["counts"]["minutes"], "counts": entry["counts"]["counts"],
                      "total": len(view), "done": sum(1 for card in view if card["done"]), "items": view})
     return rows
 
@@ -967,7 +967,7 @@ def portrait_payload(data, student, own_profile=None, moment=None, courses=None)
          "value": (int(plan_bits.get("rate") or 0) if plan_active and plan_bits.get("planned")
                    else round((plan_rate(week_subs, goals["weekly_submissions"]) +
                                plan_rate(week_revs, goals["weekly_reviews"])) / 2)),
-         "detail": (f"计划 {plan_bits.get('done') or 0}/{plan_bits.get('planned') or 0} 张卡，按每日任务回算"
+         "detail": (f"计划 {plan_bits.get('done') or 0}/{plan_bits.get('planned') or 0} 项任务，按每日任务回算"
                     if plan_active else
                     f"练习 {week_subs}/{goals['weekly_submissions']} · 复习 {week_revs}/{goals['weekly_reviews']}")},
         {"id": "review", "label": "复习履约", "weight": 20,
@@ -1031,7 +1031,7 @@ def portrait_payload(data, student, own_profile=None, moment=None, courses=None)
         {"id": "meta", "label": "元认知与计划",
          "value": f"本周 {plan_state['current_rate']}%",
          "detail": (f"已结束 {plan_state['closed_count']} 周中达标 {plan_state['met_count']} 周"
-                    + (f" · 本周计划 {plan_bits.get('done') or 0}/{plan_bits.get('planned') or 0} 张卡"
+                    + (f" · 本周计划 {plan_bits.get('done') or 0}/{plan_bits.get('planned') or 0} 项任务"
                        if plan_active else
                        f" · 备用目标 {goals['weekly_submissions']} 次练习 / {goals['weekly_reviews']} 次复习"))},
         {"id": "reading", "label": "资料阅读",
@@ -1046,7 +1046,7 @@ def portrait_payload(data, student, own_profile=None, moment=None, courses=None)
     if not submissions:
         headline = "还没有正式练习记录。完成一份练习后，画像会从提交、复习和课堂互动一起长出来。"
     else:
-        headline = f"本周完成率 {parts[1]['value']}%，{len(unresolved)} 题待复习（{len(due)} 题已逾期）"
+        headline = f"本周计划完成率 {parts[1]['value']}%，{len(unresolved)} 题待复习（{len(due)} 题已逾期）"
         if weak:
             headline += f"，薄弱点在{'、'.join(item['name'] for item in weak[:2])}"
         headline += "。"

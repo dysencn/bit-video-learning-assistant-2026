@@ -254,7 +254,7 @@ async function learningPage() {
     const questionBlock = questions.length
       ? (preview
         ? `<div class="quiz preview-quiz"><p class="preview-note">学生视角预览：可查看题库标答与解析，不能提交。</p><div class="questions">${questions.map((q, i) => `<fieldset class="question" disabled><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" disabled> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div></div>`
-        : `<form class="quiz" data-chapter="${esc(ch.id)}"><div class="questions">${questions.map((q, i) => `<fieldset class="question"><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details class="bank-solution"><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交本章练习</button></div><div class="quiz-result" role="status"></div></form>`)
+        : `<form class="quiz" data-chapter="${esc(ch.id)}"><div class="questions">${questions.map((q, i) => `<fieldset class="question" data-question="${esc(q.id)}"><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details class="bank-solution"><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交本章练习</button></div><div class="quiz-result" role="status"></div></form>`)
       : '<p class="muted">本章暂无单选题。</p>';
     return `<section class="chapter"><div class="section-title"><div><span class="eyebrow">CHAPTER ${ci + 1}</span><h2>${esc(ch.title)}</h2></div><span class="tag">${questions.length} 道单选 · ${programming.length} 道编程</span></div>
       ${preview ? '<p class="preview-note">此页面为学生视角预览，可查看自主练习标答，隐藏判题用例。</p>' : ""}
@@ -266,6 +266,15 @@ async function learningPage() {
     </section>`;
   }).join("");
   layout(`<div class="learning-panel">${preview ? '<div class="preview-banner">学生视角预览 · 不可提交</div>' : ""}<span class="eyebrow">${esc(course.teacher)} · ${esc(course.chapters.length)} 个章节 · COURSE LEARNING</span><h1>${esc(course.title)}</h1>${course.teaching_class ? `<p class="dashboard-class-label">${esc(course.teaching_class)} · ${esc(course.term || "")}</p>` : ""}<p class="muted">${esc(course.description)}</p>${chapterBlocks}<div class="actions">${preview ? link("edit-course", "返回课程编辑", "primary", {course:course.id}) : link("learning-center", "查看学生画像")}</div></div>`, `${course.title}${preview ? " · 预览" : ""}`);
+  const focusId = params.get("focus");
+  if (focusId) {
+    const target = root.querySelector(`[data-reading-resource="${CSS.escape(focusId)}"],[data-question="${CSS.escape(focusId)}"]`);
+    if (target) {
+      if (target.tagName === "DETAILS") target.open = true;
+      target.classList.add("is-focus");
+      target.scrollIntoView({block: "center"});
+    }
+  }
   if (preview) return;
   trackReading();
   root.querySelectorAll("form.quiz").forEach(form => {

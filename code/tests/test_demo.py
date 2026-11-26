@@ -1118,6 +1118,11 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(checkin["week"]["plan_cards"], week["progress"]["planned"])
         self.assertEqual(checkin["week"]["plan_done"], week["progress"]["done"])
         self.assertEqual(checkin["week"]["plan_rate"], week["progress"]["rate"])
+        review_planned = sum(1 for row in week["days"] if row["date"] <= today
+                             for card in row["items"] if card["kind"] == "review")
+        self.assertEqual(checkin["week"]["plan_review_cards"], review_planned)
+        self.assertLessEqual(checkin["week"]["plan_review_done"], checkin["week"]["plan_review_cards"])
+        self.assertEqual(checkin["week"]["plan_review_done"], week["progress"]["review_done"])
 
         portrait = call("/api/student/portrait", None, "GET")
         meta = portrait["metacognition"]

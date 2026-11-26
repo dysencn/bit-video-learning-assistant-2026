@@ -545,8 +545,11 @@ def plan_week_progress(rows, today):
     due = [row for row in rows if row["date"] <= today.isoformat() and row["total"]]
     total = sum(row["total"] for row in due)
     done = sum(row["done"] for row in due)
+    review_due = [card for row in due for card in row.get("items") or [] if card.get("kind") == "review"]
     return {"planned": total, "done": done,
-            "rate": int(round(done / total * 100)) if total else None}
+            "rate": int(round(done / total * 100)) if total else None,
+            "review_planned": len(review_due),
+            "review_done": sum(1 for card in review_due if card.get("done"))}
 
 
 def plan_number(token: str) -> int:
@@ -3469,6 +3472,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                      "plan_cards": planned_cards, "plan_done": done_cards,
                      "plan_rate": progress.get("rate"),
                      "submission_rate": plan_rate(week_submissions, goals["weekly_submissions"]),
+                     "plan_review_cards": int(progress.get("review_planned") or 0),
+                     "plan_review_done": int(progress.get("review_done") or 0),
+                     "plan_review_rate": (int(round(progress["review_done"] * 100 / progress["review_planned"]))
+                                          if progress.get("review_planned") else 0),
                      "review_rate": plan_rate(week_reviews, goals["weekly_reviews"])},
             "today": {"date": today.isoformat(),
                       "submissions": int(today_entry.get("submissions", 0)),

@@ -155,8 +155,8 @@ STUDY_ACHIEVEMENTS = [
     ("first_submission", "第一次练习", "完成第一次正式练习提交"),
     ("first_review", "第一次复习", "在错题本里完成第一次复习"),
     ("perfect_score", "满分一次", "任意一次练习提交拿到 100 分"),
-    ("streak_3", "连续三天", "连续 3 天都有学习活动"),
-    ("streak_7", "连续七天", "连续 7 天都有学习活动"),
+    ("streak_3", "连续三天", "连续 3 天完成当日全部计划任务"),
+    ("streak_7", "连续七天", "连续 7 天完成当日全部计划任务"),
     ("review_20", "复习二十题", "累计完成 20 次错题复习"),
     ("clear_wrong", "错题清零", "曾经有错题，且当前全部已掌握"),
 ("week_goal", "周目标达成", "本周计划排出的每日任务全部完成"),
@@ -234,7 +234,7 @@ def record_event(data, student_id, kind, moment=None, *, course_id=None, ref_id=
 def study_streak(days: dict, today: date) -> tuple[int, int]:
     """返回 (当前连续天数, 历史最长连续天数)。
 
-    今天还没学习时从昨天开始回溯——当天没打卡不该立刻清零，第二天仍无活动才算中断。
+    今天还没完成当日计划时从昨天开始回溯——当天没打卡不该立刻清零，第二天仍没打卡才算中断。
     """
     active = sorted(day for day, entry in days.items() if entry.get("submissions") or entry.get("reviews"))
     if not active:
@@ -517,27 +517,50 @@ def build_plan_days(weeks, parsed):
     return days
 
 
-def plan_week_calendar(week, days, parsed, data, student):
-    """本周 7 天的逐日安排；不可学的日子标 rest，有任务的日子算出完成度。"""
+def plan_week_calendar(week, days, parsed, data, student, saved=None):
+    """本周 7 天的逐日安排；不可学的日子标 rest，有任务的日子算出完成度。
+
+    当天已经在页面上生成过任务卡时，优先用那张卡，避免「今日任务」与「本周进度」两套口径不一致。
+    """
     begin = date.fromisoformat(week["start"])
     allowed = parsed.get("allowed_weekdays") or plan_weekdays_for(parsed.get("allowed_days"))
     table = {entry["date"]: entry for entry in days}
+    tasks = (saved or {}).get("tasks") or {}
     rows = []
     for offset in range(7):
         one_day = begin + timedelta(days=offset)
-        entry = table.get(one_day.isoformat())
-        if entry is None:
-            rows.append({"date": one_day.isoformat(), "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
+        key = one_day.isoformat()
+        entry = table.get(key)
+        cards = tasks.get(key)
+        if entry is None and not cards:
+            rows.append({"date": key, "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
                          "rest": one_day.weekday() not in allowed, "minutes": 0,
                          "counts": plan_item_counts([])["counts"], "total": 0, "done": 0, "items": []})
             continue
+        cards = cards or (entry or {}).get("items") or []
+        counts = plan_item_counts(cards)
         activity = plan_day_activity(data, student, one_day)
         view = [{**card, "id": f"{card['kind']}:{card['ref_id']}", "done": plan_task_done(card, activity)}
-                for card in entry["items"]]
-        rows.append({"date": one_day.isoformat(), "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
-                     "rest": False, "minutes": entry["counts"]["minutes"], "counts": entry["counts"]["counts"],
+                for card in cards]
+        rows.append({"date": key, "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
+                     "rest": one_day.weekday() not in allowed, "minutes": counts["minutes"],
+                     "counts": counts["counts"],
                      "total": len(view), "done": sum(1 for card in view if card["done"]), "items": view})
     return rows
+
+
+def plan_day_checkin(data, student, saved, day):
+    """某天是否算成功打卡：当天排了任务卡时要求全部完成；没生成任务卡的日子退回「当天有练习或复习」。"""
+    cards = (saved.get("tasks") or {}).get(day.isoformat())
+    if cards:
+        activity = plan_day_activity(data, student, day)
+        done = sum(1 for card in cards if plan_task_done(card, activity))
+        return {"date": day.isoformat(), "plan_total": len(cards), "plan_done": done,
+                "complete": done == len(cards), "has_plan": True, "kind": "plan"}
+    counts = ((data.get("study_activity") or {}).get(student["id"]) or {}).get(day.isoformat()) or {}
+    active = bool(counts.get("submissions") or counts.get("reviews"))
+    return {"date": day.isoformat(), "plan_total": 0, "plan_done": 0, "complete": False,
+            "has_plan": False, "kind": "activity" if active else "none"}
 
 
 def plan_week_progress(rows, today):
@@ -869,7 +892,7 @@ def study_plan_goal_view(data, student, courses, moment=None):
                     if plan["start"] <= today.isoformat() <= plan["end"]), None)
     if current is None:
         current = weeks[0] if weeks else None
-    week_days = plan_week_calendar(current, days, parsed, data, student) if current else []
+    week_days = plan_week_calendar(current, days, parsed, data, student, saved) if current else []
     progress = plan_week_progress(week_days, today)
     tasks = plan_today_cards(workload["items"], parsed, data, student, saved, today, days)
     return {"goal": {"text": goal.get("text"), "parsed": parsed,
@@ -3433,24 +3456,33 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         due = [record for record in unresolved if (record.get("next_review_at") or "") <= now]
         total_submissions = sum(int(entry.get("submissions", 0)) for entry in days.values())
         total_reviews = sum(int(entry.get("reviews", 0)) for entry in days.values())
-        current_run, longest_run = study_streak(days, today)
         perfect = any(record.get("score") == 100 for record in data["submissions"]
                       if record.get("student_id") == student["id"])
-        calendar = []
-        for offset in range(STUDY_CALENDAR_DAYS - 1, -1, -1):
-            day = today - timedelta(days=offset)
-            entry = days.get(day.isoformat()) or {}
-            calendar.append({
-                "date": day.isoformat(), "label": f"{day.month}/{day.day}",
-                "week": WEEKDAY_LABELS[(day.weekday() + 1) % 7],
-                "submissions": int(entry.get("submissions", 0)),
-                "reviews": int(entry.get("reviews", 0)),
-                "active": bool(entry.get("submissions") or entry.get("reviews")),
-                "today": day == today,
-            })
         plan_view = study_plan_goal_view(data, student,
                                          [course for course in data.get("courses") or []
                                           if accepts_student(course, student)])
+        checkins = [plan_day_checkin(data, student, saved, today - timedelta(days=offset))
+                    for offset in range(STUDY_CALENDAR_DAYS - 1, -1, -1)]
+        checkin_days = {item["date"]: {"submissions": 1 if item["complete"] else 0, "reviews": 0}
+                        for item in checkins}
+        current_run, longest_run = study_streak(checkin_days, today)
+        calendar = []
+        for item in checkins:
+            day = date.fromisoformat(item["date"])
+            entry = days.get(item["date"]) or {}
+            calendar.append({
+                "date": item["date"], "label": f"{day.month}/{day.day}",
+                "week": WEEKDAY_LABELS[(day.weekday() + 1) % 7],
+                "submissions": int(entry.get("submissions", 0)),
+                "reviews": int(entry.get("reviews", 0)),
+                "active": bool(item["complete"]),
+                "state": ("done" if item["complete"] and item["has_plan"]
+                          else "partial" if item["has_plan"]
+                          else "outside" if item["kind"] == "activity" else "none"),
+                "has_plan": item["has_plan"],
+                "plan_total": item["plan_total"], "plan_done": item["plan_done"],
+                "today": day == today,
+            })
         progress = (plan_view.get("week") or {}).get("progress") or {}
         planned_cards = int(progress.get("planned") or 0)
         done_cards = int(progress.get("done") or 0)
@@ -3481,7 +3513,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                       "submissions": int(today_entry.get("submissions", 0)),
                       "reviews": int(today_entry.get("reviews", 0)),
                       "due": len(due),
-                      "active": bool(today_entry.get("submissions") or today_entry.get("reviews"))},
+                      "plan_total": int(checkins[-1]["plan_total"]),
+                      "plan_done": int(checkins[-1]["plan_done"]),
+                      "complete": bool(checkins[-1]["complete"]),
+                      "active": bool(checkins[-1]["complete"])},
             "streak": {"current": current_run, "longest": longest_run},
             "calendar": calendar,
             "achievements": [{"id": key, "title": title, "desc": desc, "unlocked": unlocked[key]}
@@ -3490,7 +3525,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                        "unresolved": len(unresolved), "mastered": len(wrong) - len(unresolved),
                        "due": len(due)},
                 "plan": plan_view,
-        "scope": "只统计正式练习提交与错题复习；打开页面、看视频不计入打卡",
+        "scope": "打卡＝当天计划里的任务全部完成；当天没排任务的日子不计入打卡，练习或复习没做完计划也不算",
         }
 
     @app.get("/api/student/plan")

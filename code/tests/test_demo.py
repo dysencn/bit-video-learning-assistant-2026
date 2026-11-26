@@ -1124,6 +1124,19 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertLessEqual(checkin["week"]["plan_review_done"], checkin["week"]["plan_review_cards"])
         self.assertEqual(checkin["week"]["plan_review_done"], week["progress"]["review_done"])
 
+        tasks = checkin["plan"]["tasks"] or {}
+        plan_total = int(tasks.get("total") or 0)
+        plan_done = int(tasks.get("done") or 0)
+        self.assertEqual(checkin["today"]["plan_total"], plan_total)
+        self.assertEqual(checkin["today"]["plan_done"], plan_done)
+        # 打卡口径：当天计划任务全部完成才算，完成一半不算打卡
+        self.assertEqual(checkin["today"]["complete"], plan_total > 0 and plan_done == plan_total)
+        last = checkin["calendar"][-1]
+        self.assertEqual(last["date"], checkin["today"]["date"])
+        self.assertEqual(last["has_plan"], plan_total > 0)
+        self.assertEqual(last["plan_total"], plan_total)
+        self.assertEqual(last["plan_done"], plan_done)
+        self.assertEqual(last["active"], checkin["today"]["complete"])
         portrait = call("/api/student/portrait", None, "GET")
         meta = portrait["metacognition"]
         self.assertTrue(meta["has_plan"])
@@ -1135,6 +1148,26 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(goal_part["label"], "本周计划完成")
         self.assertEqual(goal_part["value"], week["progress"]["rate"])
 
+        from demo.app import plan_day_checkin
+        probe = date(2026, 11, 6)
+        stamp = f"{probe.isoformat()}T02:00:00+00:00"
+        probe_cards = {"tasks": {probe.isoformat(): [
+            {"kind": "review", "ref_id": "probe-r"},
+            {"kind": "code", "ref_id": "probe-p"}]}}
+        probe_student = {"id": account}
+        only_review = {"learning_events": [{"student_id": account, "type": "review",
+                                            "ref_id": "probe-r", "ts": stamp}],
+                       "submissions": [], "study_activity": {}}
+        half = plan_day_checkin(only_review, probe_student, probe_cards, probe)
+        self.assertEqual(half["plan_done"], 1)
+        self.assertFalse(half["complete"])  # 做了一半不算打卡
+        both = {**only_review, "submissions": [{"student_id": account, "type": "python",
+                                                "question_id": "probe-p", "submitted_at": stamp}]}
+        full = plan_day_checkin(both, probe_student, probe_cards, probe)
+        self.assertEqual(full["plan_done"], 2)
+        self.assertTrue(full["complete"])  # 全部完成才算打卡
+        # 当天没排任务时，仅有练习记录也不算成功打卡
+        self.assertFalse(plan_day_checkin(only_review, probe_student, {}, probe)["complete"])
         call("/api/student/plan/goal", {}, "DELETE")
 
 

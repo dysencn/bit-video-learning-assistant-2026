@@ -14,6 +14,7 @@ import { mountVideo } from "/static/video.js";
 import { liveQuizPage } from "/static/live-quiz.js";
 import { initializeApiKey } from "/static/ai-key.js";
 import { initializeXfyunCredentials } from "/static/xfyun-key.js";
+import { knowledgeGraphPage } from "/static/knowledge-graph.js";
 
 const root = document.getElementById("platform");
 const params = new URLSearchParams(location.search);
@@ -256,16 +257,22 @@ async function learningPage() {
         ? `<div class="quiz preview-quiz"><p class="preview-note">学生视角预览：可查看题库标答与解析，不能提交。</p><div class="questions">${questions.map((q, i) => `<fieldset class="question" disabled><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" disabled> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div></div>`
         : `<form class="quiz" data-chapter="${esc(ch.id)}"><div class="questions">${questions.map((q, i) => `<fieldset class="question"><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details class="bank-solution"><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交本章练习</button></div><div class="quiz-result" role="status"></div></form>`)
       : '<p class="muted">本章暂无单选题。</p>';
-    return `<section class="chapter"><div class="section-title"><div><span class="eyebrow">CHAPTER ${ci + 1}</span><h2>${esc(ch.title)}</h2></div><span class="tag">${questions.length} 道单选 · ${programming.length} 道编程</span></div>
+    return `<section class="chapter" id="chapter-${esc(ch.id)}"><div class="section-title"><div><span class="eyebrow">CHAPTER ${ci + 1}</span><h2>${esc(ch.title)}</h2></div><span class="tag">${questions.length} 道单选 · ${programming.length} 道编程</span></div>
       ${preview ? '<p class="preview-note">此页面为学生视角预览，可查看自主练习标答，隐藏判题用例。</p>' : ""}
       ${assignmentBlock}
-      ${resources.length ? `<div class="resource-list">${resources.map(r => `<div class="resource"><div><b>${esc(r.name)}</b><small>${esc(r.kind)}</small></div>${r.job_id ? `<div class="actions"><a class="secondary" href="${fileUrl(`/api/jobs/${encodeURIComponent(r.job_id)}/files/pdf?preview=true`)}" target="_blank" rel="noopener">打开课件 ↗</a>${course.teacher_id === user.id ? link("video", "提取结果", "ghost", {job:r.job_id}) : ""}</div>` : '<span class="muted">资源说明</span>'}</div>`).join("")}</div>` : ""}
-      ${resources.filter(r => r.content).map(r => `<details class="study-note" open data-reading-resource="${esc(r.id)}" data-course-id="${esc(course.id)}"><summary>${icon("book")}${esc(r.name)}</summary><div>${r.content.split("\n").map(paragraph => paragraph.trim() ? `<p data-reading-part>${esc(paragraph)}</p>` : "").join("")}${r.code ? `<pre data-reading-part><code>${esc(r.code)}</code></pre>` : ""}</div></details>`).join("")}
+      ${resources.length ? `<div class="resource-list">${resources.map(r => `<div class="resource" ${r.content ? "" : `id="resource-${esc(r.id)}"`}><div><b>${esc(r.name)}</b><small>${esc(r.kind)}</small></div>${r.job_id ? `<div class="actions"><a class="secondary" href="${fileUrl(`/api/jobs/${encodeURIComponent(r.job_id)}/files/pdf?preview=true`)}" target="_blank" rel="noopener">打开课件 ↗</a>${course.teacher_id === user.id ? link("video", "提取结果", "ghost", {job:r.job_id}) : ""}</div>` : '<span class="muted">资源说明</span>'}</div>`).join("")}</div>` : ""}
+      ${resources.filter(r => r.content).map(r => `<details class="study-note" open id="resource-${esc(r.id)}" data-reading-resource="${esc(r.id)}" data-course-id="${esc(course.id)}"><summary>${icon("book")}${esc(r.name)}</summary><div>${r.content.split("\n").map(paragraph => paragraph.trim() ? `<p data-reading-part>${esc(paragraph)}</p>` : "").join("")}${r.code ? `<pre data-reading-part><code>${esc(r.code)}</code></pre>` : ""}</div></details>`).join("")}
       ${questionBlock}
       ${programming.map(q => `<div class="python-question-link"><div><b>${esc(q.title)}</b><small>Python 编程 · 3 秒 / 256 MB</small></div>${preview ? '<span class="tag neutral">学生可编写代码</span>' : link("programming", "编写代码", "primary", {course:course.id, question:q.id})}</div>`).join("")}
     </section>`;
   }).join("");
-  layout(`<div class="learning-panel">${preview ? '<div class="preview-banner">学生视角预览 · 不可提交</div>' : ""}<span class="eyebrow">${esc(course.teacher)} · ${esc(course.chapters.length)} 个章节 · COURSE LEARNING</span><h1>${esc(course.title)}</h1>${course.teaching_class ? `<p class="dashboard-class-label">${esc(course.teaching_class)} · ${esc(course.term || "")}</p>` : ""}<p class="muted">${esc(course.description)}</p>${chapterBlocks}<div class="actions">${preview ? link("edit-course", "返回课程编辑", "primary", {course:course.id}) : link("learning-center", "查看学生画像")}</div></div>`, `${course.title}${preview ? " · 预览" : ""}`);
+  layout(`<div class="learning-panel">${preview ? '<div class="preview-banner">学生视角预览 · 不可提交</div>' : ""}<span class="eyebrow">${esc(course.teacher)} · ${esc(course.chapters.length)} 个章节 · COURSE LEARNING</span><h1>${esc(course.title)}</h1>${course.teaching_class ? `<p class="dashboard-class-label">${esc(course.teaching_class)} · ${esc(course.term || "")}</p>` : ""}<p class="muted">${esc(course.description)}</p>${preview ? "" : `<div class="actions">${link("knowledge-graph", "查看学习顺序", "secondary", {course:course.id})}</div>`}${chapterBlocks}<div class="actions">${preview ? link("edit-course", "返回课程编辑", "primary", {course:course.id}) : link("learning-center", "查看学生画像")}</div></div>`, `${course.title}${preview ? " · 预览" : ""}`);
+  const resource = params.get("resource");
+  const chapter = params.get("chapter");
+  if (resource || chapter) {
+    const target = document.getElementById(resource ? `resource-${resource}` : `chapter-${chapter}`);
+    target?.scrollIntoView();
+  }
   if (preview) return;
   trackReading();
   root.querySelectorAll("form.quiz").forEach(form => {
@@ -545,7 +552,9 @@ async function profilePage() {
 }
 async function reviewPage() {
   if (user.role !== "student") throw new Error("请使用学生账号打开错题与复习");
-  return reviewCenter(context(), page === "wrong" ? "all" : undefined);
+  return reviewCenter(context(), page === "wrong" ? "all" : params.get("tab"), {
+    course:params.get("course"), point:params.get("knowledge_point_id")
+  });
 }
 
 async function accountPage() {
@@ -579,6 +588,7 @@ async function render() {
     return;
   }
   const views = {"programming-advice":() => programmingAdvicePage(context(), params.get("run"), params.get("start") === "1"), "live-quiz":() => liveQuizPage(context()), analysis:() => analysisPage(context(), params.get("record"), params.get("start") === "1"), "ai-quiz":() => quizPage(context(), params.get("job"), params.get("run"), params.get("wait")), programming:() => programmingPage(context(), params.get("course"), params.get("question")), dashboard, teaching:() => teachingCoursesPage(context()), "class-students":() => classStudentsPage(context()), "learning-center":() => learningFilePage(context()), course:learningPage, "new-course":newCoursePage, "edit-course":editCoursePage, records:recordsPage, wrong:reviewPage, review:reviewPage, "review-center":reviewPage, profile:profilePage, account:accountPage, assignments:() => assignmentsPage(context()), "assignment-builder":() => assignmentBuilderPage(context()), "teaching-ai":() => teachingAiPage(context()), assignment:() => assignmentDetailPage(context()), gradebook:() => gradebookPage(context()), "student-detail":() => studentDetailPage(context()), announcements:() => announcementsPage(context())};
+  if (page === "knowledge-graph") return knowledgeGraphPage(context());
   if (!views[page]) throw new Error("页面不存在");
   await views[page]();
 }

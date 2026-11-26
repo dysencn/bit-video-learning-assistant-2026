@@ -34,6 +34,7 @@ from .teaching_catalog import upgrade_teaching_samples
 from .demo_assignments import upgrade_assignment_titles
 from .assignment_questions import (answers_visible, record_answers_visible, upgrade_independent_assignments, validate_questions)
 from .learning_metrics import build_profiles, teacher_analytics as aggregate_teacher
+from .knowledge_graph import build_graph_update, graph_view
 from .enrollments import is_enrolled, matches_major, subject_key, upgrade_enrollments, replace_roster
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 from .summaries import SummaryManager, SummaryError, SUMMARY_CSP
@@ -206,7 +207,7 @@ def activity_days(data, student_id) -> dict:
 
 
 def record_event(data, student_id, kind, moment=None, *, course_id=None, ref_id=None,
-                 correct=None, duration_seconds=0, source="course"):
+                 correct=None, duration_seconds=0, source="course", knowledge_point_id=None):
     """追加一条学习事件（只增不改），并同步打卡计数，返回写入的事件本身。
 
     事件是明细，study_activity 是它的日聚合视图：两者同一次写入，避免"画像有、
@@ -224,6 +225,8 @@ def record_event(data, student_id, kind, moment=None, *, course_id=None, ref_id=
              "course_id": course_id, "type": kind, "ref_id": ref_id,
              "correct": correct, "duration_seconds": int(duration_seconds or 0),
              "source": source}
+    if knowledge_point_id is not None:
+        event["knowledge_point_id"] = knowledge_point_id
     data.setdefault("learning_events", []).append(event)
     checkin = EVENT_CHECKIN.get(kind)
     if checkin:
@@ -282,15 +285,28 @@ def knowledge_schedule(submissions, moment=None):
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
     now_stamp = now.isoformat()
+    ordered = sorted(submissions, key=lambda item: item.get("submitted_at") or "")
+    known_points = {}
+    for record in ordered:
+        for detail in record.get("details") or []:
+            if detail.get("knowledge_point_id") and detail.get("knowledge_point_name"):
+                key = (record.get("course_id"), detail["knowledge_point_name"])
+                known_points.setdefault(key, set()).add(detail["knowledge_point_id"])
     points = {}
-    for record in sorted(submissions, key=lambda item: item.get("submitted_at") or ""):
+    for record in ordered:
         stamp = record.get("submitted_at") or ""
         for detail in record.get("details") or []:
             name = detail.get("knowledge_point_name") or "未分类"
             if name == "未分类":
                 continue  # 没有知识点的题无法排进复习，不占位
-            key = detail.get("knowledge_point_id") or name
-            entry = points.setdefault(key, {"id": key, "name": name, "answered": 0,
+            course_id = record.get("course_id")
+            point_id = detail.get("knowledge_point_id")
+            # Existing schedules may have only a label. Merge when this course has one matching ID.
+            candidates = known_points.get((course_id, name), set())
+            if not point_id and len(candidates) == 1:
+                point_id = next(iter(candidates))
+            key = (course_id, point_id) if point_id else name
+            entry = points.setdefault(key, {"id": point_id or name, "name": name, "answered": 0,
                                             "correct": 0, "streak": 0, "last_seen": stamp})
             entry["answered"] += 1
             if detail.get("correct"):
@@ -1017,12 +1033,14 @@ def _student_record_view(record, assignments, submissions):
     return {**record, "answers_locked": False, "can_analyze": True}
 
 
-def _filter_wrong_items(items, course_id=None, knowledge_point=None, chapter=None):
+def _filter_wrong_items(items, course_id=None, knowledge_point=None, chapter=None, knowledge_point_id=None):
     """错题本按课程、章节、知识点过滤；"all" 或空值表示不过滤。"""
     if course_id and course_id != "all":
         items = [item for item in items if item.get("course_id") == course_id]
     if knowledge_point and knowledge_point != "all":
         items = [item for item in items if (item.get("knowledge_point_name") or "未分类") == knowledge_point]
+    if knowledge_point_id:
+        items = [item for item in items if item.get("knowledge_point_id") == knowledge_point_id]
     if chapter and chapter != "all":
         items = [item for item in items if (item.get("chapter_title") or "未分章节") == chapter]
     return items
@@ -1244,6 +1262,7 @@ class LearningStore:
 
     def public_course(self, course, include_answers=False, bank_answers=False):
         result = dict(course)
+        result.pop("knowledge_graph", None)
         result["student_count"] = sum(row.get("course_id") == course["id"] and row.get("status", "active") == "active"
                                       for row in self.data.get("enrollments", []))
         result["resources"] = [dict(item) for item in course["resources"]]
@@ -1463,6 +1482,52 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         course = owned_course(request, course_id)
         return request.app.state.learning.public_course(course, include_answers=False, bank_answers=True)
 
+    @app.get("/api/courses/{course_id}/knowledge-graph")
+    async def get_knowledge_graph(request: Request, course_id: str):
+        user = request.app.state.accounts.current(request)
+        store = request.app.state.learning
+        with store.lock:
+            if user["role"] == "teacher":
+                course = owned_course(request, course_id)
+                roster = app.state.accounts.students()
+                student_ids = {student["id"] for student in
+                               _course_roster(course, roster, store.data["submissions"],
+                                              store.data.get("enrollments", []))}
+            else:
+                course = store.course(course_id)
+                if not course or course["status"] != "published" or not accepts_student(course, user):
+                    raise HTTPException(404, "课程不存在或尚未发布")
+                student_ids = {user["id"]}
+            return graph_view(course, store.data, student_ids, teacher=user["role"] == "teacher",
+                              get_job=app.state.jobs.get)
+
+    @app.put("/api/courses/{course_id}/knowledge-graph")
+    async def save_knowledge_graph(request: Request, course_id: str):
+        payload = await json_object(request)
+        store = request.app.state.learning
+        with store.lock:
+            course = editable_course(request, course_id)
+            previous = course.get("knowledge_graph")
+            revision = previous["revision"] if previous else 0
+            if type(payload.get("revision")) is not int:
+                raise HTTPException(400, "图谱版本无效，请重新打开图谱")
+            if revision != payload["revision"]:
+                raise HTTPException(409, "图谱已更新，请刷新后重新编辑")
+            try:
+                graph = build_graph_update(course, payload, app.state.jobs.get)
+            except ValueError as error:
+                raise HTTPException(400, str(error)) from None
+            course["knowledge_graph"] = {**graph, "revision": revision + 1}
+            try:
+                store.save()
+            except OSError:
+                if previous is None:
+                    course.pop("knowledge_graph", None)
+                else:
+                    course["knowledge_graph"] = previous
+                raise HTTPException(507, "图谱保存失败，请检查磁盘后重试") from None
+            return {"revision": course["knowledge_graph"]["revision"]}
+
     def enrollment_view(request, course):
         students = request.app.state.accounts.students()
         store = request.app.state.learning
@@ -1586,11 +1651,23 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 clone["chapters"] = [{"id": uuid.uuid4().hex[:10], "title": "第 1 章", "order": 1}]
             first_chapter = clone["chapters"][0]["id"]
             clone["resources"] = []
+            resource_map = {}
             for resource in source.get("resources", []):
                 item = deepcopy(resource)
                 item["id"] = uuid.uuid4().hex[:10]
+                resource_map[resource["id"]] = item["id"]
                 item["chapter_id"] = chapter_map.get(resource.get("chapter_id"), first_chapter)
                 clone["resources"].append(item)
+            if "knowledge_graph" in clone:
+                graph = clone["knowledge_graph"]
+                graph["revision"] = 1
+                graph["prerequisites"] = [{"before": kp_map[edge["before"]], "after": kp_map[edge["after"]]}
+                                          for edge in graph["prerequisites"]]
+                graph["evidence"] = [
+                    {**item, "knowledge_point_id": kp_map[item["knowledge_point_id"]],
+                     "resource_id": resource_map[item["resource_id"]]}
+                    for item in graph["evidence"] if item["resource_id"] in resource_map
+                ]
             clone["questions"] = []
             for question in source.get("questions", []):
                 if _is_retired(question):
@@ -1912,8 +1989,17 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         if (not isinstance(ids, list) or not 1 <= len(ids) <= 10
                 or any(not isinstance(item, str) for item in ids) or len(set(ids)) != len(ids)):
             raise HTTPException(400, "请勾选 1–10 道不重复的 AI 题目")
+        point_assignments = payload.get("knowledge_point_ids", {})
+        if not isinstance(point_assignments, dict) or any(qid not in ids for qid in point_assignments):
+            raise HTTPException(400, "只能为选中的题目设置知识点")
         store = request.app.state.learning
         with request.app.state.quizzes.lock, store.lock:
+            editable_course(request, course_id)
+            if chapter_id not in {chapter["id"] for chapter in course["chapters"]}:
+                raise HTTPException(400, "请选择有效的目标章节")
+            point_ids = {point["id"] for point in course.get("knowledge_points", [])}
+            if any(not isinstance(value, str) or value not in point_ids for value in point_assignments.values()):
+                raise HTTPException(400, "请选择本班的有效知识点")
             try:
                 quiz = request.app.state.quizzes.read(job_id)
             except SummaryError as error:
@@ -1932,7 +2018,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                     existing.append(previous["id"])
                     continue
                 question = {**deepcopy(questions[qid]), "id": uuid.uuid4().hex[:10],
-                            "chapter_id": chapter_id, "ai_source": source}
+                            "chapter_id": chapter_id, "ai_source": source,
+                            "knowledge_point_id": point_assignments.get(qid)}
                 course["questions"].append(question)
                 imported.append(question["id"])
             if imported:
@@ -2278,17 +2365,21 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             question_chapters = {question.get("chapter_id") for question in questions if question.get("chapter_id")}
             if len(question_chapters) == 1:
                 chapter_id = question_chapters.pop()
+        point_names = {point["id"]: point["name"] for point in course.get("knowledge_points", [])}
         for question in questions:
             selected = answers.get(question["id"])
             if type(selected) is not int or not 0 <= selected < len(question["options"]):
                 raise HTTPException(400, "请完成所有题目并选择有效选项")
             is_correct = selected == question["answer"]
             correct += int(is_correct)
+            point_id = question.get("knowledge_point_id")
+            if not isinstance(point_id, str) or point_id not in point_names:
+                point_id = None
             details.append({"question_id": question["id"], "selected": selected, "correct": is_correct,
                             "answer": question["answer"], "text": question["text"], "options": question["options"],
                             "chapter_id": question.get("chapter_id"), "explanation": question.get("explanation", ""),
-                            "knowledge_point_name": next((point["name"] for point in course.get("knowledge_points", [])
-                                                          if point["id"] == question.get("knowledge_point_id")), "未分类")})
+                            "knowledge_point_id": point_id,
+                            "knowledge_point_name": point_names.get(point_id, "未分类")})
         raw_score = round(correct / len(questions) * 100)
         now = datetime.now(timezone.utc)
         late, late_days, penalty = (False, 0, 0)
@@ -2345,7 +2436,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             for detail in details:
                 if not detail["correct"]:
                     question = question_by_id.get(detail["question_id"], {})
-                    kp_id = question.get("knowledge_point_id")
+                    kp_id = detail["knowledge_point_id"]
                     detail_chapter_id = question.get("chapter_id") or detail.get("chapter_id")
                     record = existing.get(detail["question_id"])
                     if record:
@@ -3448,20 +3539,22 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
 
     @app.get("/api/wrong-questions")
     async def wrong_questions(request: Request, course_id: str | None = None,
-                              knowledge_point: str | None = None, chapter: str | None = None):
+                              knowledge_point: str | None = None, chapter: str | None = None,
+                              knowledge_point_id: str | None = None):
         user = require_role(request, "student")
         with request.app.state.learning.lock:
             items = student_wrong_records(request, user)
-        return _filter_wrong_items(items, course_id, knowledge_point, chapter)
+        return _filter_wrong_items(items, course_id, knowledge_point, chapter, knowledge_point_id)
 
     @app.get("/api/wrong-questions/export.csv")
     async def wrong_questions_csv(request: Request, course_id: str | None = None,
-                                  knowledge_point: str | None = None, chapter: str | None = None):
+                                  knowledge_point: str | None = None, chapter: str | None = None,
+                                  knowledge_point_id: str | None = None):
         """导出本人错题为 CSV（UTF-8 BOM，Excel 可直接打开）。"""
         user = require_role(request, "student")
         with request.app.state.learning.lock:
             items = _filter_wrong_items(student_wrong_records(request, user),
-                                        course_id, knowledge_point, chapter)
+                                        course_id, knowledge_point, chapter, knowledge_point_id)
         items.sort(key=lambda item: item.get("last_wrong_at") or "", reverse=True)
         stream = io.StringIO()
         writer = csv.writer(stream, lineterminator="\r\n")
@@ -3571,7 +3664,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 record["next_review_at"] = _days_later(1)
                 record["status"] = "unresolved"
             record_event(store.data, user["id"], "review", now, course_id=record.get("course_id"),
-                         ref_id=record.get("id"), correct=correct, source="course")
+                         ref_id=record.get("id"), correct=correct, source="course",
+                         knowledge_point_id=record.get("knowledge_point_id") if not record.get("assignment_id") else None)
             store.save()
             return {**dict(record), "correct": correct, "answer": answer}
     @app.get("/api/jobs")

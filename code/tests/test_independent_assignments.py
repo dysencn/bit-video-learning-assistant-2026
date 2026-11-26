@@ -181,5 +181,5 @@ class IndependentAssignmentMigrationTests(unittest.TestCase):
             self.assertEqual(result['score'],100);self.assertEqual(result['id'],'old-grade')
             self.assertEqual({k:v for k,v in result['details'][0].items() if k!='question_id'},
                              {k:v for k,v in record['details'][0].items() if k!='question_id'})
-            self.assertEqual(json.loads(path.with_name('learning-platform.before-independent-assignments.json').read_text()),before)
+            self.assertEqual(json.loads(path.with_name('learning-platform.before-independent-assignments.json').read_text(encoding='utf-8')),before)
             self.assertEqual(LearningStore(path).data,migrated.data)

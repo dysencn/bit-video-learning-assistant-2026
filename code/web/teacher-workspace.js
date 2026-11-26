@@ -1,6 +1,7 @@
 import {courseLabel} from "/static/teaching-courses.js";
 import {esc, icon} from "/static/ui.js";
 import {initializeApiKey, ensureApiKey, openApiKeyDialog} from "/static/ai-key.js";
+import {knowledgePointOptions, selectedKnowledgePoints} from "/static/ai-quiz-actions.js";
 
 export function workspaceNav(ctx, course, active) {
   const tabs = [
@@ -8,6 +9,7 @@ export function workspaceNav(ctx, course, active) {
     ["students", "class-students", "班级学生", "user", {}],
     ["content", "edit-course", "章节与资料", "book", {section:"content"}],
     ["questions", "edit-course", "课程题库", "target", {section:"questions"}],
+    ["knowledge-graph", "knowledge-graph", "学习顺序", "layers", {}],
     ["assignments", "assignments", "作业管理", "check", {}],
     ["ai", "teaching-ai", "AI 出题与分析", "chart", {}],
     ["gradebook", "gradebook", "成绩册", "chart", {}],
@@ -99,19 +101,38 @@ export async function teachingAiPage(ctx) {
         const imported = new Set(course.questions.filter(q => q.ai_source?.job_id === jobId && q.ai_source?.quiz_id === quiz.id).map(q => q.ai_source.question_id));
         panel.hidden = false;
         panel.innerHTML = `<div class="section-title"><div><span class="eyebrow">REVIEW BEFORE IMPORT</span><h2>审核 AI 题目</h2><p class="muted">核对题干、正确答案和解析；勾选的题目会加入课程题库，供学生自主练习和查看解析。</p></div><button class="ghost" id="close-ai-preview">收起预览</button></div><label>导入到章节<select id="ai-import-chapter">${course.chapters.map(ch => `<option value="${esc(ch.id)}" ${ch.id === currentChapter ? "selected" : ""}>${esc(ch.title)}</option>`).join("")}</select></label><div class="ai-question-review">${quiz.questions.map((q, i) => `<article class="teacher-question-review"><label class="check-row"><input type="checkbox" name="import-question" value="${esc(q.id)}" ${imported.has(q.id) ? "disabled" : "checked"}><b>${i + 1}. ${esc(q.text)}</b><span class="tag neutral">${imported.has(q.id) ? "已导入" : "待审核"}</span></label><ol type="A">${q.options.map((option, j) => `<li class="${j === q.answer ? "correct-answer" : ""}">${esc(option)}${j === q.answer ? " ✓" : ""}</li>`).join("")}</ol><p class="muted">解析：${esc(q.explanation)}</p></article>`).join("")}</div><div class="composer-actions"><span id="ai-import-count" role="status"></span><div class="actions"><button class="ghost" id="ai-select-all">全选待导入题目</button><button class="primary" id="ai-import-submit">确认导入课程题库</button></div></div><div id="ai-import-result" role="status"></div>`;
-        const count = () => { const n = panel.querySelectorAll('[name="import-question"]:checked').length; panel.querySelector("#ai-import-count").textContent = `已勾选 ${n} 道题`; panel.querySelector("#ai-import-submit").disabled = !n; };
+        panel.querySelectorAll(".teacher-question-review").forEach(card => {
+          const question = card.querySelector('[name="import-question"]');
+          card.insertAdjacentHTML("beforeend", `<label>知识点<select data-import-point="${esc(question.value)}">${knowledgePointOptions(course.knowledge_points)}</select></label>`);
+        });
+        let saving = false;
+        const count = () => {
+          const ids = [...panel.querySelectorAll('[name="import-question"]:checked:not(:disabled)')].map(input => input.value);
+          panel.querySelector("#ai-import-count").textContent = `已勾选 ${ids.length} 道题`;
+          panel.querySelector("#ai-import-submit").disabled = saving || !ids.length;
+          panel.querySelectorAll("[data-import-point]").forEach(select => {
+            select.disabled = saving || !course.knowledge_points?.length || !ids.includes(select.dataset.importPoint);
+          });
+        };
         panel.onchange = count; count();
         panel.querySelector("#close-ai-preview").onclick = () => { panel.hidden = true; };
         panel.querySelector("#ai-select-all").onclick = () => { panel.querySelectorAll('[name="import-question"]:not(:disabled)').forEach(input => { input.checked = true; }); count(); };
-        panel.querySelector("#ai-import-submit").onclick = async event => {
-          const submit = event.currentTarget; submit.disabled = true;
+        panel.querySelector("#ai-import-submit").onclick = async () => {
+          const selected = [...panel.querySelectorAll('[name="import-question"]:checked:not(:disabled)')];
+          const ids = selected.map(input => input.value);
+          saving = true;
+          panel.inert = true;
+          count();
           try {
-            const result = await post(`/api/courses/${encodeURIComponent(course.id)}/questions/import-ai`, {job_id:jobId, quiz_id:quiz.id, chapter_id:panel.querySelector("#ai-import-chapter").value, question_ids:[...panel.querySelectorAll('[name="import-question"]:checked')].map(input => input.value)});
+            const result = await post(`/api/courses/${encodeURIComponent(course.id)}/questions/import-ai`, {
+              job_id:jobId, quiz_id:quiz.id, chapter_id:panel.querySelector("#ai-import-chapter").value,
+              question_ids:ids, knowledge_point_ids:selectedKnowledgePoints(panel, ids)
+            });
             course.questions = result.course.questions;
-            panel.querySelectorAll('[name="import-question"]:checked').forEach(input => { input.checked = false; input.disabled = true; input.closest("label").querySelector(".tag").textContent = "已导入"; });
+            selected.forEach(input => { input.checked = false; input.disabled = true; input.closest("label").querySelector(".tag").textContent = "已导入"; });
             panel.querySelector("#ai-import-result").innerHTML = `<div class="result"><b>已导入 ${result.imported_ids.length} 道题${result.existing_ids.length ? `，${result.existing_ids.length} 道已存在` : ""}</b><p>题目已保存到自主练习题库。作业需另行创建独立题目。</p><div class="actions">${link("assignment-builder", "创建独立作业", "primary", {course:course.id})}${link("edit-course", "打开课程题库", "secondary", {course:course.id, section:"questions"})}</div></div>`;
           } catch (error) { tell(error.message); }
-          finally { count(); }
+          finally { saving = false; panel.inert = false; count(); }
         };
         panel.scrollIntoView({behavior:"smooth", block:"start"});
       } catch (error) { tell(error.message); }

@@ -387,3 +387,17 @@ body:has(#platform)>header,body:has(#platform)>main{display:none}#platform{min-h
 #platform .plan-today-line{font-size:12px;color:var(--muted);margin:6px 0 10px}
 #platform .plan-today-line b{color:var(--ink)}
 @media(max-width:640px){#platform .plan-task{grid-template-columns:auto minmax(0,1fr);row-gap:6px}#platform .plan-task-state{justify-self:start}#platform .plan-task small{grid-column:1 / -1}}
+
+#platform .plan-week{display:grid;gap:8px;margin:10px 0 14px;padding-top:12px;border-top:1px solid var(--line)}
+#platform .plan-week-counts{margin:0;font-size:13px;color:var(--ink)}
+#platform .plan-week-points{margin:0;font-size:12px;overflow-wrap:anywhere}
+#platform .plan-day-grid{display:flex;flex-wrap:wrap;gap:8px}
+#platform .plan-day{flex:1 1 190px;min-width:0;display:grid;gap:2px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:#fff;font-size:12px;color:var(--muted)}
+#platform .plan-day .plan-day-date{font-weight:600;color:var(--ink)}
+#platform .plan-day b{font-size:12px;color:var(--green)}
+#platform .plan-day span,#platform .plan-day b{overflow-wrap:anywhere}
+#platform .plan-day.is-today{border-color:var(--green);box-shadow:inset 0 0 0 1px var(--green)}
+#platform .plan-day.is-rest{background:var(--paper);opacity:.7}
+#platform .plan-goal.is-primary{padding-right:18px;border-right:1px solid var(--line)}
+#platform .plan-goal.is-primary .plan-goal-head span{color:var(--ink);font-weight:600}
+@media(max-width:850px){#platform .plan-day{flex:1 1 100%}#platform .plan-goal.is-primary{padding-right:0;border-right:0}}

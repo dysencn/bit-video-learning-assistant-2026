@@ -1042,5 +1042,94 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(cleared["goals"]["weekly_submissions"], 4)
 
 
+    def test_24_plan_daily_breakdown_and_checkin(self):
+        """每周任务摊到具体日期（跳过休息日），打卡按计划的每日任务回算，画像同步同一口径。"""
+        from datetime import date
+
+        from demo.app import (build_plan_days, build_plan_weeks, parse_plan_text,
+                              plan_item_counts, plan_week_progress)
+
+        parsed = parse_plan_text("两周内学完 Python 程序设计入门，每周只有 2 小时，周末不学", [])
+        self.assertEqual(parsed["allowed_weekdays"], [0, 1, 2, 3, 4])
+        self.assertEqual(parse_plan_text("这两周只能周末学，每周 3 小时", [])["allowed_weekdays"], [5, 6])
+        self.assertEqual(parse_plan_text("", [])["allowed_weekdays"], list(range(7)))
+
+        items = [{"kind": "review", "ref_id": f"w{i}", "minutes": 2, "point": "循环"} for i in range(10)]
+        items.append({"kind": "practice", "ref_id": "k1", "title": "函数 · 4 题", "minutes": 6,
+                      "count": 4, "point": "函数", "question_ids": ["a", "b", "c", "d"]})
+        weeks = build_plan_weeks(items, parsed, date(2026, 11, 2))
+        days = build_plan_days(weeks, parsed)
+        self.assertTrue(days)
+        self.assertEqual({entry["weekday"] for entry in days} - {"周一", "周二", "周三", "周四", "周五"}, set())
+        for entry in days:
+            self.assertLessEqual(entry["counts"]["counts"]["review"], 4)
+        self.assertEqual(sum(entry["counts"]["counts"]["review"] for entry in days), 10)
+
+        counts = plan_item_counts(items)
+        self.assertEqual(counts["counts"]["practice"], 4)
+        self.assertEqual(counts["points"], ["循环", "函数"])
+
+        rows = [{"date": "2026-11-02", "rest": False, "total": 2, "done": 1},
+                {"date": "2026-11-03", "rest": False, "total": 2, "done": 0},
+                {"date": "2026-11-04", "rest": False, "total": 2, "done": 0}]
+        progress = plan_week_progress(rows, date(2026, 11, 3))
+        self.assertEqual(progress["planned"], 4)
+        self.assertEqual(progress["done"], 1)
+        self.assertEqual(progress["rate"], 25)
+
+        account = "student-demo-1"
+
+        def call(path, payload=None, method="POST"):
+            request = Request(self.url + path,
+                              data=json.dumps(payload).encode() if payload is not None else None,
+                              headers={"X-Local-Token": self.token, "X-Account-ID": account,
+                                       "Content-Type": "application/json"}, method=method)
+            with self.client.open(request, timeout=30) as response:
+                return json.load(response)
+
+        text = "两周内学完 Python 程序设计入门，每周只有 2 小时，周末不学"
+        plan = call("/api/student/plan/goal", {"text": text}, "PUT")["plan"]
+        week = plan["week"]
+        today = plan["tasks"]["date"]
+        self.assertEqual(len(week["days"]), 7)
+        rest = [row for row in week["days"] if row["rest"]]
+        self.assertEqual(len(rest), 2)
+        for row in rest:
+            self.assertEqual(row["total"], 0)
+            self.assertEqual(row["minutes"], 0)
+        for row in week["days"]:
+            self.assertLessEqual(row["counts"]["counts"]["review"], 4)
+        self.assertEqual(week["summary"]["counts"]["review"],
+                         sum(row["counts"]["counts"]["review"] for row in week["days"]))
+        self.assertEqual(week["progress"]["planned"],
+                         sum(row["total"] for row in week["days"] if row["date"] <= today))
+        self.assertEqual(week["progress"]["rate"],
+                         round(week["progress"]["done"] / week["progress"]["planned"] * 100)
+                         if week["progress"]["planned"] else 0)
+        self.assertLessEqual(week["progress"]["done"], week["progress"]["planned"])
+        scheduled = [row for row in week["days"] if row["date"] == today]
+        if scheduled:
+            self.assertEqual(plan["tasks"]["total"], scheduled[0]["total"])
+
+        checkin = call("/api/student/plan", None, "GET")
+        self.assertEqual(checkin["week"]["plan_cards"], week["progress"]["planned"])
+        self.assertEqual(checkin["week"]["plan_done"], week["progress"]["done"])
+        self.assertEqual(checkin["week"]["plan_rate"], week["progress"]["rate"])
+
+        portrait = call("/api/student/portrait", None, "GET")
+        meta = portrait["metacognition"]
+        self.assertTrue(meta["has_plan"])
+        self.assertEqual(meta["plan"]["planned"], week["progress"]["planned"])
+        self.assertEqual(meta["plan"]["done"], week["progress"]["done"])
+        self.assertEqual([row for row in portrait["categories"] if row["id"] == "meta"][0]["value"],
+                         f"本周 {week['progress']['rate']}%")
+        goal_part = [row for row in portrait["investment"]["parts"] if row["id"] == "goal"][0]
+        self.assertEqual(goal_part["label"], "本周计划完成")
+        self.assertEqual(goal_part["value"], week["progress"]["rate"])
+
+        call("/api/student/plan/goal", {}, "DELETE")
+
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -401,3 +401,5 @@ body:has(#platform)>header,body:has(#platform)>main{display:none}#platform{min-h
 #platform .plan-goal.is-primary{padding-right:18px;border-right:1px solid var(--line)}
 #platform .plan-goal.is-primary .plan-goal-head span{color:var(--ink);font-weight:600}
 @media(max-width:850px){#platform .plan-day{flex:1 1 100%}#platform .plan-goal.is-primary{padding-right:0;border-right:0}}
+#platform .plan-goals.wide{grid-template-columns:repeat(3,minmax(0,1fr))}
+@media(max-width:850px){#platform .plan-goals.wide{grid-template-columns:1fr}}

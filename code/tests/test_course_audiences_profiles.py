@@ -204,7 +204,7 @@ class AudienceProfileHTTPTests(unittest.TestCase):
         self.assertEqual(changed["teaching_class"], "2026级 软件02班")
         self.assertEqual(self.request("/api/courses/course-demo")["teaching_class"], "软件工程 01班")
 
-    def test_review_updates_schedule_without_changing_profile_or_grades(self):
+    def test_review_updates_schedule_and_radar_without_changing_grades(self):
         course = self.make_course(["m-soft"])
         self.submit(course, "student-demo-1")
         before = self.request("/api/student/profile", account="student-demo-1")
@@ -215,7 +215,12 @@ class AudienceProfileHTTPTests(unittest.TestCase):
         result = self.request(f"/api/wrong-questions/{item['id']}/review", {"selected": 0}, "student-demo-1")
         self.assertTrue(result["correct"])
         self.assertEqual(result["review_interval_days"], 2)
-        self.assertEqual(self.request("/api/student/profile", account="student-demo-1"), before)
+        after = self.request("/api/student/profile", account="student-demo-1")
+        before_review = before["profile"]["radar_dimensions"].pop("review_accuracy")
+        after_review = after["profile"]["radar_dimensions"].pop("review_accuracy")
+        self.assertIsNone(before_review["value"])
+        self.assertEqual(after_review, {"value": 100, "numerator": 1, "denominator": 1})
+        self.assertEqual(after, before)
         self.assertEqual(self.request("/api/learning-records", account="student-demo-1"), grades)
         self.request(f"/api/wrong-questions/{item['id']}/mastered", {}, "student-demo-1")
         self.assertEqual(self.request("/api/review/due", account="student-demo-1"), [])

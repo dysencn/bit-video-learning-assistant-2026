@@ -33,7 +33,8 @@ from .demo_catalog import demo_courses, upgrade_catalog, upgrade_programming_sam
 from .teaching_catalog import upgrade_teaching_samples
 from .demo_assignments import upgrade_assignment_titles
 from .assignment_questions import (answers_visible, record_answers_visible, upgrade_independent_assignments, validate_questions)
-from .learning_metrics import build_profiles, teacher_analytics as aggregate_teacher
+from .learning_metrics import (READING_THRESHOLD, build_profiles, scoped_reading_progress,
+                               teacher_analytics as aggregate_teacher)
 from .knowledge_graph import build_graph_update, graph_view
 from .enrollments import is_enrolled, matches_major, subject_key, upgrade_enrollments, replace_roster
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
@@ -174,7 +175,6 @@ EVENT_LABELS = {"practice_submit": "练习提交", "code_submit": "编程题提�
                 "resource_read": "资料阅读"}
 
 # 学习资料读到 60% 才记一次阅读：进度条过半不等于学过，避免"点开就打卡"。
-READING_THRESHOLD = 60
 # 知识点级复习沿用题目级 SM-2 的间隔序列（天），只是没有独立 EF，用正确率修正档位。
 KNOWLEDGE_INTERVALS = (2, 6, 15, 38, 95)
 
@@ -405,16 +405,14 @@ def reading_payload(data, student_id, courses=None):
     计入分母会让完成度永远到不了 100%。
     """
     table = (data.get("reading_progress") or {}).get(student_id) or {}
-    resources = [item for course in (courses or []) for item in (course.get("resources") or [])
-                 if item.get("content")]
-    names = {item["id"]: item.get("name") for item in resources}
-    done = [key for key, value in table.items() if int(value.get("percent") or 0) >= READING_THRESHOLD]
-    recent = [{"id": key, "name": names.get(key) or value.get("name"),
+    resources, entries = scoped_reading_progress(table, courses or [])
+    done = sum(int(value.get("percent") or 0) >= READING_THRESHOLD for value in entries.values())
+    recent = [{"id": key, "name": resources[key][1] or value.get("name"),
                "percent": int(value.get("percent") or 0), "updated_at": value.get("updated_at")}
-              for key, value in sorted(table.items(),
+              for key, value in sorted(entries.items(),
                                        key=lambda pair: pair[1].get("updated_at") or "", reverse=True)[:4]]
-    return {"total": len(resources), "done": len(done),
-            "percent": round(len(done) / len(resources) * 100) if resources else None,
+    return {"total": len(resources), "done": done,
+            "percent": round(done / len(resources) * 100) if resources else None,
             "recent": recent}
 
 
@@ -2879,7 +2877,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         students = request.app.state.accounts.students()
         with store.lock:
             courses = [course for course in store.data["courses"] if course["teacher_id"] == teacher["id"]]
-            return aggregate_teacher(courses, store.data["submissions"], students, app.state.learning.data.get("enrollments", []))
+            return aggregate_teacher(courses, store.data["submissions"], students, store.data.get("enrollments", []),
+                                     radar_data=store.data)
 
     def gradebook_payload(request, course, mode="latest", status_filter="all", start=None, end=None, chapter_filter=None):
         store = request.app.state.learning
@@ -3026,8 +3025,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             submissions.sort(key=lambda record: record.get("submitted_at", ""), reverse=True)
             course_submissions = [record for record in store.data["submissions"]
                                   if record.get("course_id") in course_ids]
-            profiles = build_profiles(courses, course_submissions, students, app.state.learning.data.get("enrollments", []))
-            profile = next((item for item in profiles if item["student_id"] == student_id), None)
+            profiles = build_profiles(courses, course_submissions, students, store.data.get("enrollments", []),
+                                      radar_data=store.data, include_student_id=student_id)
+            profile = next(item for item in profiles if item["student_id"] == student_id)
             wrong = [record for record in store.data.get("wrong_questions", [])
                      if record["student_id"] == student_id and record.get("course_id") in course_ids]
             assignments = []
@@ -3308,15 +3308,10 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                        if (course["status"] == "published" and accepts_student(course, student)) or course["id"] in history]
             assignments = {item["id"]: item for item in store.data.get("assignments", [])}
             visible_submissions = [_student_record_view(record, assignments, store.data["submissions"]) for record in store.data["submissions"]]
-            profiles = build_profiles(courses, visible_submissions, students, app.state.learning.data.get("enrollments", []))
-            own = next((profile for profile in profiles if profile["student_id"] == student["id"]), None)
-            if own is None:
-                own = {"student_id": student["id"], "student": student["name"], "major_id": student.get("major_id"),
-                       "submission_count": 0, "course_count": 0, "available_course_count": 0,
-                       "average_score": None, "latest_submitted_at": None, "weak_points": [],
-                       "course_participation": 0, "practice_activity": 0, "mastery_score": 0,
-                       "needs_attention": False, "not_started": True}
-            return {"profile": own, "scope": "本人可学习及已参与课程；仅统计正式练习提交，复习不计分"}
+            profiles = build_profiles(courses, visible_submissions, students, store.data.get("enrollments", []),
+                                      radar_data=store.data, include_student_id=student["id"])
+            own = next(profile for profile in profiles if profile["student_id"] == student["id"])
+            return {"profile": own, "scope": "本人可学习及已参与课程。练习和作业分别计分，复习单独统计。"}
 
     @app.get("/api/student/portrait")
     async def student_portrait(request: Request):
@@ -3335,7 +3330,9 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                        for record in store.data["submissions"]]
             own = next((item for item in build_profiles(courses, visible, students, store.data.get("enrollments", []))
                         if item["student_id"] == student["id"]), None)
-            return portrait_payload(store.data, student, own, courses=courses)
+            reading_courses = [course for course in courses
+                               if course["status"] == "published" and accepts_student(course, student)]
+            return portrait_payload(store.data, student, own, courses=reading_courses)
 
     def study_plan_payload(store, student):
         """学习计划与打卡：本周目标完成度、今日任务、连续天数、30 天打卡与成就。"""

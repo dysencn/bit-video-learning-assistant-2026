@@ -191,6 +191,111 @@ class EnrollmentHTTPTests(unittest.TestCase):
         self.assertEqual(new_paper["student_count"], 0)
         self.assertEqual(new_paper["missing_count"], 0)
 
+    def test_nine_axis_radar_uses_scoped_homework_practice_reading_and_review(self):
+        idle = "student-demo-8"
+        with self.store.lock:
+            self.store.data["enrollments"] = []
+        course = self.classroom(members=[S1, S2, idle])
+        base = f"/api/courses/{course['id']}"
+        worksheet = self.request(f"{base}/resources", {"name": "可跟踪讲义", "content": "一段可阅读的内容"})
+        resource = worksheet["resources"][-1]["id"]
+        now = datetime.now(timezone.utc)
+        due = now - timedelta(hours=1)
+        first_time = now - timedelta(hours=2)
+
+        def create_paper(title, open_at, due_at, status="published"):
+            return self.request(f"{base}/assignments", {
+                "title": title, "status": status, "open_at": open_at.isoformat(),
+                "due_at": due_at.isoformat(), "max_attempts": 3, "allow_late": True,
+                "late_max_days": 2, "late_penalty_percent_per_day": 20,
+                "questions": [{"text": "作业专用题干", "options": ["A", "B"], "answer": 0,
+                               "explanation": "未解锁解析", "chapter_id": course["chapters"][0]["id"]}],
+            })
+
+        paper = create_paper("允许重交", now - timedelta(days=2), due)
+        create_paper("已经缺交", now - timedelta(days=2), due)
+        create_paper("尚未到期", now - timedelta(days=1), now + timedelta(days=1))
+        create_paper("尚未开放", now + timedelta(days=1), now + timedelta(days=2))
+        create_paper("草稿作业", now - timedelta(days=2), due, status="draft")
+        payload = {"assignment_id": paper["id"], "answers": {paper["questions"][0]["id"]: 0}}
+
+        class EarlierDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                return first_time.astimezone(tz) if tz else first_time.astimezone().replace(tzinfo=None)
+
+        with patch("demo.app.datetime", EarlierDateTime):
+            first = self.request(f"{base}/submissions", payload, S1)
+        self.assertEqual(first["score"], 100)
+        self.assertTrue(first["answers_locked"])
+        self.assertEqual(first["details"], [])
+        latest = self.request(f"{base}/submissions", payload, S1)
+        self.assertEqual(latest["score"], 80)
+        self.assertTrue(latest["late"])
+        self.assertTrue(latest["answers_locked"])
+        self.request(f"{base}/resources/{resource}/reading", {"percent": 60}, S1)
+
+        practice = {"answers": {course["questions"][0]["id"]: 0}}
+        self.request(f"{base}/submissions", practice, S2)
+        details_path = f"/api/teacher/students/{S1}?course_id={course['id']}"
+
+        def profile(student):
+            result = self.request(f"/api/student/profile?student_id={S2}", account=student)
+            self.assertEqual(result["profile"]["student_id"], student)
+            self.assertNotIn("未解锁解析", json.dumps(result, ensure_ascii=False))
+            return result["profile"]["radar_dimensions"]
+
+        homework_only = profile(S1)
+        self.assertEqual(len(homework_only), 9)
+        self.assertEqual(homework_only["course_participation"]["value"], 100)
+        self.assertEqual(homework_only["practice_activity"]["value"], 0)
+        self.assertIsNone(homework_only["practice_average"]["value"])
+        self.assertIsNone(homework_only["practice_accuracy"]["value"])
+        self.assertEqual(homework_only["assignment_completion"],
+                         {"value": 50, "numerator": 1, "denominator": 2, "pending_count": 1})
+        self.assertEqual(homework_only["assignment_on_time"], {"value": 100, "numerator": 1, "denominator": 1})
+        self.assertEqual(homework_only["assignment_average"], {"value": 80, "denominator": 1})
+        self.assertEqual(homework_only["reading_completion"], {"value": 100, "numerator": 1, "denominator": 1})
+        self.assertIsNone(homework_only["review_accuracy"]["value"])
+        practice_only = profile(S2)
+        self.assertEqual(practice_only["practice_average"]["value"], 100)
+        self.assertEqual(practice_only["assignment_completion"]["value"], 0)
+        self.assertIsNone(practice_only["assignment_average"]["value"])
+
+        self.request(f"{base}/submissions", {"answers": {course["questions"][0]["id"]: 1}}, S1)
+        wrong = self.request(f"/api/wrong-questions?course_id={course['id']}", account=S1)[0]
+        self.request(f"/api/wrong-questions/{wrong['id']}/review", {"selected": 0}, S1)
+        combined = profile(S1)
+        self.assertEqual(combined["practice_average"], {"value": 0, "denominator": 1})
+        self.assertEqual(combined["practice_accuracy"], {"value": 0, "numerator": 0, "denominator": 1})
+        self.assertEqual(combined["review_accuracy"], {"value": 100, "numerator": 1, "denominator": 1})
+        self.assertEqual(combined["assignment_average"], homework_only["assignment_average"])
+        profiles = {row["student_id"]: row["radar_dimensions"]
+                    for row in self.request("/api/teacher/analytics")["students"]}
+        self.assertEqual(profiles[S1], combined)
+        self.assertEqual(profiles[idle]["assignment_completion"]["value"], 0)
+        self.assertIsNone(profiles[idle]["practice_average"]["value"])
+        self.assertIsNone(profiles[idle]["review_accuracy"]["value"])
+        self.assertEqual(self.request(details_path)["profile"]["radar_dimensions"], combined)
+        self.error(404, details_path, account=T2)
+        self.error(404, f"/api/teacher/students/{S1}", account=T2)
+        self.error(403, details_path, account=S2)
+
+        self.request("/api/auth/login", {"username": "student8", "password": "Learn123!"})
+        late_first = self.request(f"{base}/submissions", payload, idle)
+        self.assertTrue(late_first["late"])
+        self.assertEqual(profile(idle)["assignment_on_time"], {"value": 0, "numerator": 0, "denominator": 1})
+
+        self.members(course["id"], [S2, idle])
+        historical = profile(S1)
+        self.assertEqual(historical["assignment_completion"],
+                         {"value": 100, "numerator": 1, "denominator": 1, "pending_count": 0})
+        self.assertEqual(historical["assignment_average"], combined["assignment_average"])
+        self.assertIsNone(historical["reading_completion"]["value"])
+        self.assertIsNone(self.request("/api/student/portrait", account=S1)["reading"]["percent"])
+        self.assertEqual(historical["practice_average"], combined["practice_average"])
+        self.assertNotIn(S1, {row["student_id"] for row in self.request("/api/teacher/analytics")["students"]})
+
     def test_roster_save_failure_rolls_back_memory_and_disk(self):
         course = self.classroom(members=[S1]); before = deepcopy(self.store.data["enrollments"])
         disk = self.store.path.read_bytes()

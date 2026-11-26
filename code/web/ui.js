@@ -29,24 +29,84 @@ export const assignmentSubmissionText = item => item.attempts
 export const stateTag = student => student.not_started ? '<span class="tag neutral">待开始</span>'
   : student.needs_attention ? '<span class="tag attention">需关注</span>' : '<span class="tag published">正常</span>';
 
-export function radarCard(student, personal = false) {
-  const dimensions = [["课程参与", student.course_participation], ["练习积极", student.practice_activity],
-    ["平均成绩", student.average_score], ["答题掌握", student.mastery_score]];
+const radarDimensions = [
+  ["course_participation", "课程参与率", "课程参与", "已参与", "%"],
+  ["practice_activity", "练习活跃度", "练习活跃", "提交", "%"],
+  ["practice_average", "练习均分", "练习均分", "次练习", "分"],
+  ["practice_accuracy", "练习正确率", "练习正确", "答对", "%"],
+  ["assignment_completion", "作业提交率", "作业提交", "已交", "%"],
+  ["assignment_on_time", "作业按时率", "作业按时", "按时", "%"],
+  ["assignment_average", "作业均分", "作业均分", "份作业", "分"],
+  ["reading_completion", "资料阅读完成率", "资料阅读", "已读", "%"],
+  ["review_accuracy", "错题复习正确率", "错题复习", "答对", "%"],
+];
+
+function radarPlot(dimensions, studentName) {
+  const centerX = 205, centerY = 166;
+  const angle = i => -Math.PI / 2 + 2 * Math.PI * i / dimensions.length;
   const point = (i, score) => {
-    const angle = -Math.PI/2 + Math.PI/2*i;
-    const r = 85*Math.max(0, Math.min(100, Number(score) || 0))/100;
-    return `${(180+Math.cos(angle)*r).toFixed(1)},${(155+Math.sin(angle)*r).toFixed(1)}`;
+    const radius = 104 * Math.max(0, Math.min(100, score)) / 100;
+    return [(centerX + Math.cos(angle(i)) * radius).toFixed(1),
+      (centerY + Math.sin(angle(i)) * radius).toFixed(1)];
   };
+  const positions = dimensions.map(({metric}, i) => point(i, metric.value));
   const rings = [25, 50, 75, 100].map(level => `<polygon class="radar-ring" points="${dimensions.map((_, i) => point(i, level)).join(" ")}"/>`).join("");
-  const axes = dimensions.map((_, i) => `<line x1="180" y1="155" x2="${point(i,100).split(",")[0]}" y2="${point(i,100).split(",")[1]}"/>`).join("");
-  const labels = dimensions.map(([name, score], i) => {
-    const angle = -Math.PI/2 + Math.PI/2*i, x = 180+Math.cos(angle)*130, y = 155+Math.sin(angle)*121;
-    return `<text x="${x}" y="${y}" text-anchor="middle"><tspan x="${x}">${name}</tspan><tspan x="${x}" dy="18" class="radar-value">${score === null ? "暂无" : Math.round(score ?? 0)}</tspan></text>`;
+  const axes = dimensions.map((_, i) => {
+    const [x, y] = point(i, 100);
+    return `<line class="radar-axis" x1="${centerX}" y1="${centerY}" x2="${x}" y2="${y}"/>`;
   }).join("");
-  return `<div class="radar-card"><div class="radar-visual"><svg class="radar" viewBox="0 0 360 310" role="img" aria-label="${esc(student.student)}的四维学习雷达图">${rings}${axes}<polygon class="radar-area" points="${dimensions.map(([,v],i) => point(i,v)).join(" ")}"/>${dimensions.map(([,v],i) => `<circle class="radar-dot" cx="${point(i,v).split(",")[0]}" cy="${point(i,v).split(",")[1]}" r="3.5"/>`).join("")}${labels}</svg></div>
-    <div class="radar-copy"><span class="eyebrow">LEARNING PROFILE</span><h3>${personal ? "我的学习雷达" : `${esc(student.student)}的学习雷达`}</h3>
-    <p class="muted">${student.not_started ? "还没有正式练习记录。完成第一份练习后，这里会生成你的学习画像。" : `已参与 ${student.course_count} 个教学班，留下 ${student.submission_count} 次正式练习记录。`}</p>
-    <div class="radar-legend">${dimensions.map(([name, score]) => `<span><b>${number(score)}</b>${name}</span>`).join("")}</div>
-    ${student.weak_points.length ? `<p class="radar-weak">${icon("target")}优先巩固：${esc(student.weak_points.join("、"))}</p>` : ""}
-    <details class="metric-help"><summary>这四个维度如何计算？</summary><p>课程参与：已提交的可学教学班数 / 本视图范围内本人可学的已发布教学班数。练习积极：本视图课程范围内，与其他学生最高提交次数相比的相对值。平均成绩与答题掌握分别使用提交均分和逐题正确率。复习不计入成绩。${personal ? "学生画像覆盖本人可学及历史参与课程；教师画像仅覆盖该教师的课程，范围不同可能产生不同数值。" : "不同专业学生的可学课程数分别计算。"}</p></details></div></div>`;
+  const labels = dimensions.map((dimension, i) => {
+    const direction = Math.cos(angle(i));
+    const x = (centerX + direction * 121).toFixed(1);
+    const y = (centerY + Math.sin(angle(i)) * 126).toFixed(1);
+    const anchor = direction < -0.25 ? "end" : direction > 0.25 ? "start" : "middle";
+    return `<text x="${x}" y="${y}" text-anchor="${anchor}">${dimension.axis}</text>`;
+  }).join("");
+  const dots = positions.map(([x, y]) => `<circle class="radar-dot" cx="${x}" cy="${y}" r="4"/>`).join("");
+  return `<svg class="radar" viewBox="0 0 410 330" role="img" aria-label="${esc(studentName)}的学习雷达图，共 ${dimensions.length} 项有数据">
+    ${rings}${axes}<polygon class="radar-area" points="${positions.join(" ")}"/>${dots}${labels}</svg>`;
+}
+
+function radarRows(dimensions) {
+  return `<dl class="radar-legend">${dimensions.map(({label, countLabel, unit, metric}) => {
+    const value = Number.isFinite(metric.value) ? `${metric.value}${unit}` : "暂无";
+    const count = metric.denominator ? (metric.numerator === undefined ? `${metric.denominator} ${countLabel}`
+      : `${countLabel} ${metric.numerator} / ${metric.denominator}`) : "";
+    const pending = metric.pending_count ? `待交 ${metric.pending_count} 份` : "";
+    const evidence = [count, pending].filter(Boolean).join(" · ");
+    return `<div class="radar-metric"><dt>${label}</dt><dd><strong>${value}</strong>${evidence ? `<small>${esc(evidence)}</small>` : ""}</dd></div>`;
+  }).join("")}</dl>`;
+}
+
+export function radarCard(student, personal = false) {
+  const metrics = student.radar_dimensions || {};
+  const available = [], missing = [];
+  for (const [id, label, axis, countLabel, unit] of radarDimensions) {
+    const metric = metrics[id] || {};
+    const group = Number.isFinite(metric.value) ? available : missing;
+    group.push({id, label, axis, countLabel, unit, metric});
+  }
+  let chart = '<p class="radar-empty">暂无可绘制的学习数据</p>';
+  if (available.length >= 3) {
+    chart = radarPlot(available, student.student);
+  } else if (available.length) {
+    chart = `<div class="radar-bars">${available.map(({label, axis, metric}) => `
+      <div><b>${axis}</b><meter min="0" max="100" value="${metric.value}" aria-label="${label}"></meter></div>`).join("")}
+      <div class="radar-bar-scale" aria-hidden="true"><span>0</span><span>50</span><span>100</span></div></div>`;
+  }
+  const pending = missing.find(({id}) => id === "assignment_completion")?.metric.pending_count;
+  const title = personal ? "我的学习雷达" : `${esc(student.student)}的学习雷达`;
+  return `<div class="radar-card">
+    <div class="radar-header"><h3>${title}</h3><span class="radar-coverage">${available.length} / ${radarDimensions.length} 项有数据</span></div>
+    <div class="radar-visual">${chart}</div>
+    <div class="radar-copy">
+    ${available.length ? radarRows(available) : ""}
+    ${missing.length ? `<details class="radar-missing"><summary>暂无数据（${missing.length} 项）${pending ? `<small>待交 ${esc(pending)} 份</small>` : ""}</summary>
+      ${radarRows(missing)}</details>` : ""}
+    ${student.weak_points?.length ? `<p class="radar-weak">${icon("target")}优先巩固：${esc(student.weak_points.join("、"))}</p>` : ""}
+    <details class="metric-help"><summary>九个维度如何计算？</summary>
+      <p>课程参与按当前可学班级计算。练习活跃度以同一统计范围内的最高自主练习次数为基准。练习均分与正确率来自正式自主练习。</p>
+      <p>作业提交率按已交或已到截止时间的作业计算。按时率看首次正式提交，均分取每份作业最近一次正式得分。</p>
+      <p>讲义读到 60% 计入已读。错题复习正确率按有判分结果的复习次数计算。${personal ? "教师画像按该教师的课程统计，数值可能因范围不同而有所差异。" : ""}</p>
+    </details></div></div>`;
 }

@@ -7,3 +7,68 @@
 #platform .insight-grid strong { color:#145c43; font-size:18px; }
 #platform .insight-grid span,#platform .profile-insights p { color:#486256; font-size:13px; }
 #platform .profile-insights p { margin:12px 0 0; }
+
+#platform .radar-card {
+  grid-template-columns:minmax(0,1fr) minmax(0,.9fr);
+  align-items:start;
+  gap:18px 30px;
+}
+#platform .radar-header {
+  grid-column:1 / -1;
+  display:flex;
+  flex-wrap:wrap;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:4px 12px;
+}
+#platform .radar-header h3 { margin:0; }
+#platform .radar-coverage { color:#4e6f61; font-size:13px; }
+#platform .radar-card .radar { max-width:410px; }
+#platform .radar-card .radar text { font-size:17px; font-weight:600; }
+#platform .radar-card .radar-visual { align-items:center; align-self:stretch; }
+#platform .radar-visual .radar-empty { margin:24px 0; color:#4e6f61; text-align:center; }
+#platform .radar-card .radar-copy {
+  align-self:stretch;
+  border-inline-start:1px solid #dce8e0;
+  padding:0 0 0 24px;
+}
+#platform .radar-card .radar-legend { display:block; margin:0; }
+#platform .radar-metric {
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  align-items:baseline;
+  gap:4px 12px;
+  padding:6px 0;
+  border-bottom:1px solid #e4ede6;
+}
+#platform .radar-metric dt { font-weight:650; }
+#platform .radar-metric dd { margin:0; text-align:end; }
+#platform .radar-metric strong { color:#126953; font-variant-numeric:tabular-nums; }
+#platform .radar-metric small { display:block; color:#4e6f61; font-size:12px; }
+#platform .radar-missing { margin-top:12px; color:#4e6f61; font-size:13px; }
+#platform .radar-missing:first-child { margin-top:0; }
+#platform .radar-missing summary { cursor:pointer; padding:5px 0; }
+#platform .radar-missing summary small { margin-inline-start:8px; font-size:12px; }
+#platform .radar-missing .radar-metric strong { color:inherit; }
+#platform .radar-bars { display:grid; gap:14px; width:min(100%, 360px); padding:14px 0; }
+#platform .radar-bars meter {
+  width:100%;
+  height:12px;
+  display:block;
+  margin-top:5px;
+  appearance:none;
+}
+#platform .radar-bars meter::-webkit-meter-bar { background:#e2eee7; border:0; border-radius:6px; }
+#platform .radar-bars meter::-webkit-meter-optimum-value { background:#4c9a70; border-radius:6px; }
+#platform .radar-bars meter::-moz-meter-bar { background:#4c9a70; border-radius:6px; }
+#platform .radar-bar-scale {
+  display:flex;
+  justify-content:space-between;
+  color:#4e6f61;
+  font-size:12px;
+}
+
+@media (max-width:760px) {
+  #platform .radar-card { grid-template-columns:minmax(0,1fr); gap:12px; }
+  #platform .radar-card .radar-copy { border-inline-start:0; border-top:1px solid #dce8e0; padding:10px 0 0; }
+}

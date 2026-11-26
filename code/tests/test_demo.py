@@ -1054,16 +1054,31 @@ class DemoIntegrationTest(unittest.TestCase):
         self.assertEqual(parse_plan_text("这两周只能周末学，每周 3 小时", [])["allowed_weekdays"], [5, 6])
         self.assertEqual(parse_plan_text("", [])["allowed_weekdays"], list(range(7)))
 
-        items = [{"kind": "review", "ref_id": f"w{i}", "minutes": 2, "point": "循环"} for i in range(10)]
+        # 复习只排「已经到期」的：8 条在窗口内到期，2 条到期日远在计划之外
+        reviews = [{"kind": "review", "ref_id": f"w{i}", "minutes": 2, "point": "循环",
+                    "due": "2026-11-02" if i < 8 else "2026-12-30"} for i in range(10)]
+        items = list(reviews)
         items.append({"kind": "practice", "ref_id": "k1", "title": "函数 · 4 题", "minutes": 6,
                       "count": 4, "point": "函数", "question_ids": ["a", "b", "c", "d"]})
         weeks = build_plan_weeks(items, parsed, date(2026, 11, 2))
-        days = build_plan_days(weeks, parsed)
+        days = build_plan_days(weeks, parsed, reviews)
         self.assertTrue(days)
         self.assertEqual({entry["weekday"] for entry in days} - {"周一", "周二", "周三", "周四", "周五"}, set())
         for entry in days:
             self.assertLessEqual(entry["counts"]["counts"]["review"], 4)
-        self.assertEqual(sum(entry["counts"]["counts"]["review"] for entry in days), 10)
+            for card in entry["items"]:
+                if card["kind"] == "review":
+                    self.assertLessEqual(card["due"], entry["date"])  # 不提前透支
+        self.assertEqual(sum(entry["counts"]["counts"]["review"] for entry in days), 8)
+        self.assertFalse([card for entry in days for card in entry["items"]
+                          if card["kind"] == "review" and card["due"] == "2026-12-30"])
+
+        from demo.app import plan_task_done
+        activity = {"read": set(), "reviewed": set(), "code": set(),
+                    "answered": {"q1": True, "q2": False}}
+        self.assertFalse(plan_task_done({"kind": "knowledge", "question_ids": ["q1", "q2"],
+                                         "policy": "all"}, activity))  # 只做一半不算学完
+        self.assertTrue(plan_task_done({"kind": "knowledge", "question_ids": ["q1"]}, activity))  # 旧卡语义保留
 
         counts = plan_item_counts(items)
         self.assertEqual(counts["counts"]["practice"], 4)

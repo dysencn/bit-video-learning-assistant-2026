@@ -467,31 +467,29 @@ def plan_item_counts(items):
             "knowledge": titles, "points": points[:8]}
 
 
-def build_plan_days(weeks, parsed):
-    """把每周的卡片摊到具体日期：跳过不可学的星期，复习按天均摊，其余按顺序填满日容量。"""
+def build_plan_days(weeks, parsed, reviews=None):
+    """把每周的卡片摊到具体日期：复习只放到期的那天，新内容按日容量顺序填满。"""
     allowed = parsed.get("allowed_weekdays") or plan_weekdays_for(parsed.get("allowed_days"))
     capacity = max(1, int(parsed.get("daily_capacity") or PLAN_DAILY_CAP_MINUTES))
     review_cap = max(1, int(PLAN_DAILY_REVIEW_LIMIT))
+    queue = sorted((item for item in (reviews or []) if item.get("kind") == "review"),
+                   key=lambda item: item.get("due") or "")
     days = []
     for plan in weeks:
         begin = date.fromisoformat(plan["start"])
         slots = [begin + timedelta(days=offset) for offset in range(7)]
         slots = [day for day in slots if day.weekday() in allowed] or [begin]
-        reviews = [item for item in plan["items"] if item["kind"] == "review"]
         others = [item for item in plan["items"] if item["kind"] != "review"]
-        review_at, other_at = 0, 0
-        for index, one_day in enumerate(slots):
-            left_days = len(slots) - index
-            bucket, spent = [], 0
-            # 当天复习配额：按剩余复习与剩余天数均摊，且不超过单日上限
-            quota = min(review_cap, math.ceil((len(reviews) - review_at) / left_days)) if left_days else 0
-            while quota > 0 and review_at < len(reviews):
-                item = reviews[review_at]
+        other_at = 0
+        for one_day in slots:
+            key = one_day.isoformat()
+            bucket, spent, placed = [], 0, 0
+            # 只放到期（due <= 今天）的复习，单日不超过上限；没到期的留到那一天
+            while queue and placed < review_cap and (queue[0].get("due") or "") <= key:
+                item = queue.pop(0)
                 bucket.append(item)
                 spent += int(item["minutes"])
-                review_at += 1
-                quota -= 1
-            # 再按顺序装新内容，装到日容量为止；装不下的顺延到下一个可学日
+                placed += 1
             while other_at < len(others):
                 item = others[other_at]
                 if bucket and spent + int(item["minutes"]) > capacity:
@@ -503,17 +501,22 @@ def build_plan_days(weeks, parsed):
                     break
             if not bucket:
                 continue
-            days.append({"date": one_day.isoformat(), "week": plan["index"],
+            days.append({"date": key, "week": plan["index"],
                          "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
                          "items": bucket, "counts": plan_item_counts(bucket)})
-        # 每天容量都排满还剩下的，全部压到本周最后一个可学日，保证计划不丢任务
-        tail = reviews[review_at:] + others[other_at:]
-        if tail:
+        # 本周排满后剩下的新内容压到最后一天；未到期的复习不压缩，自会落到后面的日期
+        leftover = others[other_at:]
+        if leftover:
             for entry in reversed(days):
                 if entry["week"] == plan["index"]:
-                    entry["items"].extend(tail)
+                    entry["items"].extend(leftover)
                     entry["counts"] = plan_item_counts(entry["items"])
                     break
+    # 计划窗口内仍未投放的逾期复习，压到最后一天，避免静默丢失
+    overdue = [item for item in queue if days and (item.get("due") or "") <= days[-1]["date"]]
+    if overdue:
+        days[-1]["items"].extend(overdue)
+        days[-1]["counts"] = plan_item_counts(days[-1]["items"])
     return days
 
 
@@ -701,17 +704,23 @@ def estimate_plan_workload(data, student, courses):
         names = {kp["id"]: kp.get("name") or "未命名知识点" for kp in course.get("knowledge_points") or []}
         questions = course.get("questions") or []
         for kp_id, kp_name in names.items():
-            todo = [q.get("id") for q in questions
-                    if q.get("knowledge_point_id") == kp_id and q.get("id") not in answered]
+            all_ids = [q.get("id") for q in questions if q.get("knowledge_point_id") == kp_id]
+            todo = [qid for qid in all_ids if qid not in answered]
             if not todo:
                 continue  # 这个知识点的题都做过了，不再当新任务
-            items.append({"kind": "knowledge", "course_id": cid, "ref_id": kp_id, "title": kp_name,
-                          "point": kp_name, "question_ids": todo,
-                          "minutes": round(PLAN_ESTIMATE["knowledge"])})
-            items.append({"kind": "practice", "course_id": cid, "ref_id": kp_id,
-                          "title": f"{kp_name} · {len(todo)} 题", "point": kp_name,
-                          "question_ids": todo,
-                          "count": len(todo), "minutes": round(len(todo) * PLAN_ESTIMATE["choice"])})
+            if len(todo) == len(all_ids):
+                # 全新知识点：一张卡覆盖这个点的全部题，做完这些题才算学完这个点
+                items.append({"kind": "knowledge", "course_id": cid, "ref_id": kp_id, "title": kp_name,
+                              "point": kp_name, "question_ids": all_ids, "count": len(all_ids),
+                              "policy": "all",
+                              "minutes": round(PLAN_ESTIMATE["knowledge"]
+                                               + len(all_ids) * PLAN_ESTIMATE["choice"])})
+            else:
+                # 已经开始过：只补剩下的题，不重复占用知识点卡的额度
+                items.append({"kind": "practice", "course_id": cid, "ref_id": kp_id,
+                              "title": f"{kp_name} · {len(todo)} 题", "point": kp_name,
+                              "question_ids": todo, "count": len(todo),
+                              "minutes": round(len(todo) * PLAN_ESTIMATE["choice"])})
         for question in course.get("programming_questions") or []:
             if question.get("id") in answered:
                 continue
@@ -722,8 +731,10 @@ def estimate_plan_workload(data, student, courses):
              if record.get("student_id") == sid and record.get("status") != "mastered"]
     for record in wrong[:60]:
         text = (record.get("question_snapshot") or {}).get("text") or "错题复习"
+        due_day = local_day(record.get("next_review_at")) if record.get("next_review_at") else None
         items.append({"kind": "review", "course_id": record.get("course_id"), "ref_id": record.get("id"),
                       "title": str(text)[:30], "point": str(record.get("knowledge_point_name") or ""),
+                      "due": due_day.isoformat() if due_day else "",
                       "minutes": round(PLAN_ESTIMATE["review"])})
     counts, by_kind = {}, {}
     for item in items:
@@ -752,22 +763,14 @@ def plan_verdict(workload_minutes, weekly_minutes, weeks):
 
 
 def build_plan_weeks(items, parsed, start_day):
-    """按周装填：复习先占 20% 预算，其余新内容按顺序推进，装不下就顺延到下一周。"""
+    """按周装填新内容；复习不预分到周，交给 build_plan_days 按遗忘曲线到期日投放。"""
     weekly = max(1, int(parsed.get("weekly_minutes") or PLAN_DEFAULT_WEEKLY_MINUTES))
     weeks_count = max(1, int(parsed.get("weeks") or PLAN_DEFAULT_WEEKS))
-    reviews = [item for item in items if item["kind"] == "review"]
     others = [item for item in items if item["kind"] != "review"]
-    review_budget = weekly * PLAN_REVIEW_SHARE
-    plans, review_index, cursor = [], 0, 0
+    plans, cursor = [], 0
     for index in range(weeks_count):
         begin = start_day + timedelta(days=index * 7)
         slots, minutes = [], 0
-        while (review_index < len(reviews)
-               and minutes + reviews[review_index]["minutes"] <= review_budget):
-            item = reviews[review_index]
-            slots.append(item)
-            minutes += item["minutes"]
-            review_index += 1
         while cursor < len(others) and minutes + others[cursor]["minutes"] <= weekly:
             item = others[cursor]
             slots.append(item)
@@ -782,7 +785,7 @@ def build_plan_weeks(items, parsed, start_day):
             plans.append({"index": index + 1, "start": begin.isoformat(),
                           "end": (begin + timedelta(days=6)).isoformat(),
                           "minutes": minutes, "items": slots})
-        if cursor >= len(others) and review_index >= len(reviews):
+        if cursor >= len(others):
             break
     return plans
 
@@ -822,7 +825,10 @@ def plan_task_done(card, activity):
         ids = card.get("question_ids") or []
         return bool(ids) and all(qid in activity["answered"] for qid in ids)
     if kind == "knowledge":
-        return any(activity["answered"].get(qid) for qid in card.get("question_ids") or [])
+        ids = card.get("question_ids") or []
+        if card.get("policy") == "all":
+            return bool(ids) and all(activity["answered"].get(qid) for qid in ids)
+        return any(activity["answered"].get(qid) for qid in ids)
     if kind == "code":
         return card.get("ref_id") in activity["code"]
     return False
@@ -833,6 +839,13 @@ def plan_today_cards(items, parsed, data, student, saved, today, days=None):
     tasks = saved.setdefault("tasks", {})
     key = today.isoformat()
     cards = tasks.get(key)
+    # 旧口径的卡（知识点只要求做一题、复习不带到期日）在今天重算一次，之后当天不再变
+    stale = bool(cards) and any(
+        (card.get("kind") == "knowledge" and card.get("policy") != "all")
+        or (card.get("kind") == "review" and "due" not in card)
+        for card in cards)
+    if stale:
+        cards = None
     activity = plan_day_activity(data, student, today)
     if not cards:
         scheduled = next((entry for entry in (days or []) if entry["date"] == key), None)
@@ -843,7 +856,9 @@ def plan_today_cards(items, parsed, data, student, saved, today, days=None):
         if not picked:
             capacity = int(min((parsed.get("weekly_minutes") or PLAN_DEFAULT_WEEKLY_MINUTES)
                                / max(1, parsed.get("allowed_days") or 7), PLAN_DAILY_CAP_MINUTES))
-            for item in [entry for entry in items if entry["kind"] == "review"][:3]:
+            due_reviews = [entry for entry in items
+                           if entry["kind"] == "review" and (entry.get("due") or "") <= key]
+            for item in due_reviews[:3]:
                 picked.append({**item, "id": f"{item['kind']}:{item['ref_id']}"})
                 spent += item["minutes"]
             for item in items:
@@ -887,13 +902,17 @@ def study_plan_goal_view(data, student, courses, moment=None):
                            parsed.get("weeks") or PLAN_DEFAULT_WEEKS)
     start = local_day(parsed.get("start")) if parsed.get("start") else today
     weeks = build_plan_weeks(workload["items"], parsed, start)
-    days = build_plan_days(weeks, parsed)
+    reviews_todo = [item for item in workload["items"] if item["kind"] == "review"]
+    days = build_plan_days(weeks, parsed, reviews_todo)
     current = next((plan for plan in weeks
                     if plan["start"] <= today.isoformat() <= plan["end"]), None)
     if current is None:
         current = weeks[0] if weeks else None
     week_days = plan_week_calendar(current, days, parsed, data, student, saved) if current else []
     progress = plan_week_progress(week_days, today)
+    # 周级统计按「实际摊到日期的卡片」聚合，复习才不会被漏算
+    week_items = {plan["index"]: [item for entry in days if entry["week"] == plan["index"]
+                                  for item in entry["items"]] for plan in weeks}
     tasks = plan_today_cards(workload["items"], parsed, data, student, saved, today, days)
     return {"goal": {"text": goal.get("text"), "parsed": parsed,
                      "created_at": goal.get("created_at")},
@@ -901,12 +920,15 @@ def study_plan_goal_view(data, student, courses, moment=None):
                          "counts": workload["counts"]},
             "verdict": verdict,
             "weeks": [{"index": plan["index"], "start": plan["start"], "end": plan["end"],
-                       "minutes": plan["minutes"], "count": len(plan["items"]),
-                       "summary": plan_item_counts(plan["items"])} for plan in weeks],
+                       "minutes": plan_item_counts(week_items.get(plan["index"], []))["minutes"],
+                       "count": len(week_items.get(plan["index"], [])),
+                       "summary": plan_item_counts(week_items.get(plan["index"], []))}
+                      for plan in weeks],
             "week": None if current is None else
                     {"index": current["index"], "start": current["start"], "end": current["end"],
-                     "minutes": current["minutes"], "count": len(current["items"]),
-                     "summary": plan_item_counts(current["items"]),
+                     "minutes": plan_item_counts(week_items.get(current["index"], []))["minutes"],
+                     "count": len(week_items.get(current["index"], [])),
+                     "summary": plan_item_counts(week_items.get(current["index"], [])),
                      "days": week_days, "progress": progress},
             "tasks": tasks}
 

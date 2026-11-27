@@ -1,4 +1,4 @@
-import {esc, icon, progressBar} from "/static/ui.js";
+import {esc, icon, masteryLabels, progressBar} from "/static/ui.js";
 
 const taskKinds = {
   resource: ["资料", "阅读资料", "book"],
@@ -17,6 +17,7 @@ function taskAction(link, task, style) {
   if (task.kind === "review") return link("review-center", label, style, {tab:"today", focus:task.ref_id});
   if (task.kind === "code") return link("programming", label, style, {...course, question:task.ref_id});
   if (task.kind === "resource") return link("course", label, style, {...course, focus:task.ref_id});
+  if (task.point_id) return link("course", "专项练习", style, {...course, point:task.point_id});
   if (task.kind === "knowledge" || task.kind === "practice") {
     const focus = (task.question_ids || [])[0];
     return link("course", label, style, focus ? {...course, focus} : course);
@@ -65,7 +66,7 @@ function todayTasks(plan, link) {
     return `<li class="plan-task${task.done ? " is-done" : ""}">
       <span class="plan-task-icon">${icon(graphic)}</span>
       <div><span class="plan-task-title">${esc(task.title)}</span>
-      <small>${kind} · ${task.minutes} 分钟${task.kind === "knowledge" && task.count ? ` · ${task.count} 题` : ""}</small></div>
+      <small>${task.point_id ? "专项练习" : kind} · ${task.minutes} 分钟${(task.kind === "knowledge" || task.point_id) && task.count ? ` · ${task.count} 题` : ""}</small></div>
       <span class="plan-task-state">${task.done
         ? `<span class="tag published">${icon("check")}已完成</span>`
         : taskAction(link, task, "secondary small")}</span></li>`;
@@ -127,6 +128,16 @@ function checkinBoard(plan) {
   </section>`;
 }
 
+function masteryPlanPoints(points) {
+  if (!points?.length) return '<p class="muted">当前范围暂无需要安排的讲义或练习。</p>';
+  return `<div class="plan-mastery"><h4>学习顺序</h4>
+    <ol class="plan-point-list">${points.map(point => `<li>
+      <strong>${esc(point.name)}</strong>
+      ${point.prerequisite ? '<span class="tag neutral">先修</span>' : ""}
+      <span class="graph-mastery-status" data-mastery="${esc(point.status)}">${masteryLabels[point.status]}${point.score == null ? "" : ` · ${point.score}%`}</span>
+    </li>`).join("")}</ol></div>`;
+}
+
 export function learningPlanPanel(plan, link) {
   const goal = plan.plan?.goal;
   return `
@@ -134,58 +145,74 @@ export function learningPlanPanel(plan, link) {
     <section class="plan-board plan-goal-plan" aria-labelledby="plan-goal-title">
       <div class="plan-section-head"><div><h2 id="plan-goal-title">学习目标</h2>
         ${goal ? `<p class="plan-goal-text">${esc(goal.text)}</p>` : ""}</div>
-        ${goal ? `<span class="tag neutral">${esc(goal.parsed.deadline)} 截止</span>` : ""}</div>
+        ${goal ? `<div class="plan-goal-badges">${goal.parsed.graph ? '<span class="tag published">图谱补弱计划</span>' : ""}
+          <span class="tag neutral">${esc(goal.parsed.deadline)} 截止</span></div>` : ""}</div>
       ${goal ? `<dl class="plan-facts"><div><dt>周期</dt><dd>${goal.parsed.weeks} 周</dd></div>
         <div><dt>每周投入</dt><dd>${goal.parsed.weekly_minutes} 分钟</dd></div>
         <div><dt>每周可学</dt><dd>${goal.parsed.allowed_days} 天</dd></div>
         <div><dt>预计工作量</dt><dd>${plan.plan.workload?.minutes ?? 0} 分钟</dd></div>
         <div><dt>预算占比</dt><dd>${Math.round((plan.plan.verdict?.ratio || 0) * 100)}%</dd></div></dl>` : ""}
       ${goal && plan.plan.verdict?.advice ? `<p class="plan-verdict ${esc(plan.plan.verdict.verdict)}">${esc(plan.plan.verdict.advice)}</p>` : ""}
+      ${goal?.parsed.graph ? masteryPlanPoints(plan.plan.workload?.points) : ""}
       <details class="section-disclosure" ${goal ? "" : "open"}><summary>${goal ? "调整目标" : "设定目标"}</summary>
         <form class="plan-goal-form" id="plan-goal-form"><label>我的目标<textarea id="plan-goal-text" rows="2" maxlength="200" minlength="4" required placeholder="例如：4 周内学完 Python 的循环和函数，每周投入 5 小时">${esc(goal?.text || "")}</textarea></label>
-          <div class="actions"><button class="primary" type="submit">${icon("target")}解析目标</button>
+          <div class="actions"><button class="${goal?.parsed.graph ? "secondary" : "primary"}" type="submit">${icon("target")}${goal?.parsed.graph ? "解析文字目标" : "解析目标"}</button>
+          ${goal?.parsed.graph ? '<button class="primary" type="button" id="plan-graph-refresh">重新按掌握度预览</button>' : ""}
           ${goal ? '<button class="ghost" type="button" id="plan-goal-clear">清除目标</button>' : ""}</div></form>
-        <div id="plan-goal-preview"></div>
+        <div id="plan-goal-preview" aria-live="polite"></div>
       </details>
     </section>
     ${weeklyPlan(plan)}${checkinBoard(plan)}`;
 }
 
-export function bindLearningPlan({api, root, tell}) {
+export function bindLearningPlan({api, root, tell}, plan, graphTarget) {
   const goalForm = root.querySelector("#plan-goal-form");
   if (!goalForm) return;
   const preview = root.querySelector("#plan-goal-preview");
+  const saved = plan?.plan?.goal?.parsed;
   const sendJson = (url, method, body) => api(url, {method,
     headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const planInput = parsed => ({text:parsed.text, weeks:parsed.weeks,
+    weekly_minutes:parsed.weekly_minutes, allowed_days:parsed.allowed_days,
+    ...(parsed.graph ? {graph:parsed.graph} : {})});
+  const reloadPlan = () => {
+    const url = new URL(location.href);
+    url.searchParams.delete("graph_course");
+    url.searchParams.delete("graph_point");
+    url.searchParams.set("tab", "plan");
+    history.replaceState(null, "", url);
+    location.reload();
+  };
   const renderPreview = ({parsed, workload, verdict, courses}, adjusted = false) => {
-    const names = (courses || []).map(item => item.title).join("、");
+    const names = (courses || []).map(item => [item.title, item.teaching_class].filter(Boolean).join(" · ")).join("、");
     const kinds = Object.entries(workload.by_kind || {}).filter(([, minutes]) => minutes)
       .map(([kind, minutes]) => `${taskKinds[kind]?.[0] || kind} ${minutes} 分钟`).join(" · ");
+    const canSave = !parsed.graph || workload.points.length > 0;
     preview.innerHTML = `<section class="plan-goal-preview" aria-labelledby="plan-preview-title">
-      <div class="plan-section-head"><div><h3 id="plan-preview-title" tabindex="-1">计划预览</h3>
+      <div class="plan-section-head"><div><h3 id="plan-preview-title" tabindex="-1">${parsed.graph ? "补弱计划预览" : "计划预览"}</h3>
       <p>${esc(names || "全部已加入课程")} · 至 ${esc(parsed.deadline)}</p></div></div>
       <dl class="plan-facts"><div><dt>周期</dt><dd>${parsed.weeks} 周</dd></div><div><dt>每周投入</dt><dd>${parsed.weekly_minutes} 分钟</dd></div>
       <div><dt>每周可学</dt><dd>${parsed.allowed_days} 天</dd></div><div><dt>每天约</dt><dd>${parsed.daily_capacity} 分钟</dd></div>
       <div><dt>预计 / 可用</dt><dd>${workload.minutes} / ${verdict.budget} 分钟</dd></div><div><dt>预算占比</dt><dd>${Math.round(verdict.ratio * 100)}%</dd></div></dl>
       ${kinds ? `<p class="muted">${esc(kinds)}</p>` : ""}
-      <p class="plan-verdict ${esc(verdict.verdict)}">${esc(verdict.advice)}</p>
+      ${canSave ? `<p class="plan-verdict ${esc(verdict.verdict)}">${esc(verdict.advice)}</p>` : ""}
       ${!adjusted && parsed.notes?.length ? `<small class="muted">${esc(parsed.notes.join("。"))}</small>` : ""}
-      <div class="actions"><button class="primary" type="button" id="plan-goal-confirm">${icon("check")}确认并生成任务</button></div>
+      ${parsed.graph ? masteryPlanPoints(workload.points) : ""}
+      ${canSave ? `<div class="actions"><button class="primary" type="button" id="plan-goal-confirm">${icon("check")}${parsed.graph && saved ? "替换当前计划" : "确认并生成任务"}</button></div>` : ""}
       <details class="section-disclosure"><summary>调整时间预算</summary>
         <form id="plan-goal-adjust-box" class="plan-budget"><label>周期（周）<input name="weeks" type="number" min="1" max="26" value="${parsed.weeks}" required></label>
         <label>每周投入（分钟）<input name="weekly_minutes" type="number" min="30" max="1800" value="${parsed.weekly_minutes}" required></label>
         <label>每周可学天数<input name="allowed_days" type="number" min="1" max="7" value="${parsed.allowed_days}" required></label>
         <button class="secondary" type="submit" id="plan-goal-reparse">重新核算</button></form></details></section>`;
     preview.querySelector("#plan-preview-title").focus({preventScroll: true});
-    preview.querySelector("#plan-goal-confirm").onclick = async event => {
+    preview.querySelector("#plan-goal-confirm")?.addEventListener("click", async event => {
       const button = event.currentTarget;
       button.disabled = true;
       try {
-        await sendJson("/api/student/plan/goal", "PUT", {text:parsed.text, weeks:parsed.weeks,
-          weekly_minutes:parsed.weekly_minutes, allowed_days:parsed.allowed_days});
-        location.reload();
+        await sendJson("/api/student/plan/goal", "PUT", planInput(parsed));
+        reloadPlan();
       } catch (error) { tell(error.message); button.disabled = false; }
-    };
+    });
     preview.querySelector("#plan-goal-adjust-box").onsubmit = async event => {
       event.preventDefault();
       const form = event.currentTarget;
@@ -193,11 +220,25 @@ export function bindLearningPlan({api, root, tell}) {
       const button = form.querySelector("button");
       button.disabled = true;
       try {
-        renderPreview(await sendJson("/api/student/plan/parse", "POST", {text:parsed.text,
+        renderPreview(await sendJson("/api/student/plan/parse", "POST", {...planInput(parsed),
           weeks:Number(data.get("weeks")), weekly_minutes:Number(data.get("weekly_minutes")),
           allowed_days:Number(data.get("allowed_days"))}), true);
       } catch (error) { tell(error.message); button.disabled = false; }
     };
+  };
+  const showGraphPreview = async input => {
+    goalForm.closest("details").open = true;
+    const controls = [...goalForm.querySelectorAll("button")];
+    controls.forEach(button => {button.disabled = true;});
+    preview.textContent = "正在生成补弱计划…";
+    try {
+      renderPreview(await sendJson("/api/student/plan/parse", "POST", input));
+      if (graphTarget) preview.scrollIntoView({block:"nearest"});
+    } catch (error) {
+      preview.textContent = error.message;
+    } finally {
+      controls.forEach(button => {button.disabled = false;});
+    }
   };
   goalForm.onsubmit = async event => {
     event.preventDefault();
@@ -214,7 +255,12 @@ export function bindLearningPlan({api, root, tell}) {
   root.querySelector("#plan-goal-clear")?.addEventListener("click", async event => {
     const button = event.currentTarget;
     button.disabled = true;
-    try { await sendJson("/api/student/plan/goal", "DELETE", {}); location.reload(); }
+    try { await sendJson("/api/student/plan/goal", "DELETE", {}); reloadPlan(); }
     catch (error) { tell(error.message); button.disabled = false; }
   });
+  root.querySelector("#plan-graph-refresh")?.addEventListener("click", () => showGraphPreview(planInput(saved)));
+  if (graphTarget) {
+    const budget = saved ? {weeks:saved.weeks, weekly_minutes:saved.weekly_minutes, allowed_days:saved.allowed_days} : {};
+    showGraphPreview({...budget, graph:graphTarget});
+  }
 }

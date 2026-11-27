@@ -16,8 +16,11 @@ import uvicorn
 
 from demo.accounts import AccountStore
 from enrollment_fixtures import enroll_matching_students
-from demo.app import create_app, LearningStore
+from demo.app import create_app, LearningStore, _assignment_state, record_event
 from demo.demo_catalog import seed_activity
+from demo.demo_examples import upgrade_demo_examples
+from demo.enrollments import upgrade_enrollments
+from demo.knowledge_graph import student_mastery
 
 
 class AudienceProfileHTTPTests(unittest.TestCase):
@@ -312,6 +315,43 @@ class AudienceProfileHTTPTests(unittest.TestCase):
 
 
 class DemoMigrationTests(unittest.TestCase):
+    def test_demo_examples_refresh_overdue_samples_and_preserve_teacher_edits(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            accounts = AccountStore(root / "accounts.json")
+            store = LearningStore(root / "learning-platform.json")
+            seed_activity(store.data, accounts.users)
+            upgrade_enrollments(store.data, accounts.students())
+            data = store.data
+            cid, sid = "course-demo", "student-demo-1"
+            original = [item for item in data["assignments"] if item["course_id"] == cid]
+            for item in original:
+                item["due_at"] = (datetime.now(timezone.utc) - timedelta(days=2)).isoformat()
+            edited = next(item for item in original if item["chapter_id"] == "ch-1")
+            edited["title"] = "教师自定义测验"
+            expected_edit = deepcopy(edited)
+            grade_evidence = deepcopy(data["submissions"])
+            attempts = deepcopy(data["assignment_attempts"])
+            self.assertTrue(upgrade_demo_examples(data, accounts.users, record_event))
+            assignments = [item for item in data["assignments"] if item["course_id"] == cid]
+            self.assertEqual({_assignment_state(item) for item in assignments}, {"open", "closed", "upcoming"})
+            self.assertEqual(edited, expected_edit)
+            by_id = {item["id"]: item for item in data["submissions"]}
+            self.assertEqual([by_id[item["id"]] for item in grade_evidence], grade_evidence)
+            self.assertEqual(data["assignment_attempts"], attempts)
+            upcoming = next(item for item in assignments if _assignment_state(item) == "upcoming")
+            self.assertTrue(all(record.get("assignment_id") != upcoming["id"] for record in data["submissions"]))
+            chapters = {chapter["title"] for chapter in store.course(cid)["chapters"]}
+            self.assertTrue(all(item["title"] not in chapters and " · 课后作业" not in item["title"] for item in assignments))
+            mastery = student_mastery(store.course(cid), data, sid)
+            self.assertEqual({mastery[point]["status"] for point in ("kp1", "kp2", "kp3")},
+                             {"mastered", "needs_review", "unassessed"})
+            self.assertTrue(store.course(cid)["knowledge_graph"]["prerequisites"])
+            self.assertFalse(any(record["student_id"] == "student-demo-7" for record in data["submissions"]))
+            snapshot = deepcopy(data)
+            self.assertFalse(upgrade_demo_examples(data, accounts.users, record_event))
+            self.assertEqual(data, snapshot)
+
     def test_assignment_title_upgrade_keeps_learning_evidence_and_custom_titles(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder) / "learning-platform.json"

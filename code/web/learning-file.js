@@ -47,20 +47,21 @@ function renderPortrait(portrait) {
 
 export async function learningFilePage(ctx, initialTab = "overview") {
   const {api, layout, root, user, link, tell, params, majorName, recordList} = ctx;
-  if (user.role !== "student") throw new Error("请使用学生账号查看自己的学习档案");
+  if (user.role !== "student") throw new Error("请使用学生账号查看自己的画像");
   const [data, logs, courses, plan, portrait] = await Promise.all([api("/api/student/profile"), api("/api/learning-records"), api("/api/courses"), api("/api/student/plan").catch(() => null), api("/api/student/portrait").catch(() => null)]);
   const profile = data.profile;
   const records = logs.map(record => ({...record, course_name:record.teaching_class ? `${record.course_name} · ${record.teaching_class}` : record.course_name}));
   const courseNames = new Map(courses.map(course => [course.id,courseLabel(course)]));
   for (const record of records) if (!courseNames.has(record.course_id)) courseNames.set(record.course_id,record.course_name || "历史课程");
   const tabs = [
-    ["overview", "画像与课程进度", "chart", "learning-overview"],
+    ["overview", "画像总览", "chart", "learning-overview"],
     ...(plan ? [["plan", "计划与打卡", "target", "learning-plan"]] : []),
     ["practice", "自主练习记录", "book", "learning-records"],
     ["assignments", "作业记录", "check", "learning-records"],
   ];
   const tabIds = tabs.map(([id]) => id);
-  const requested = params.get("tab") || (params.get("panel") === "plan" ? "plan"
+  const graphTarget = params.get("graph_course") ? {course_id:params.get("graph_course"), point_id:params.get("graph_point")} : null;
+  const requested = params.get("tab") || (graphTarget || params.get("panel") === "plan" ? "plan"
     : params.get("source") === "assignment" ? "assignments" : initialTab);
   let tab = tabIds.includes(requested) ? requested : initialTab;
   const filters = {course:courseNames.has(params.get("course")) ? params.get("course") : "all",
@@ -70,18 +71,22 @@ export async function learningFilePage(ctx, initialTab = "overview") {
     const attempted = new Set(entries.flatMap(record => [record.chapter_id,...(record.details || []).map(detail=>detail.chapter_id)]).filter(Boolean));
     const practiced = course.chapters.filter(chapter=>attempted.has(chapter.id)).length;
     const scores = entries.filter(record=>!record.pending_release && typeof record.score === "number").map(record=>record.score);
-    return `<article class="learning-course-card"><div><span class="eyebrow">${esc(course.course_code || "课程学习")}</span><h3>${esc(course.title)}</h3><p class="muted">${esc(course.teaching_class || "默认教学班")} · ${esc(course.teacher)}</p></div><div class="learning-course-progress"><span>已练习 ${practiced} / ${course.chapters.length} 章</span><span>自主练习 ${entries.filter(r=>!r.assignment_id).length} 次 · 作业提交 ${entries.filter(r=>r.assignment_id).length} 次</span></div><progress max="${Math.max(1,course.chapters.length)}" value="${practiced}" aria-label="${esc(courseLabel(course))}章节练习进度"></progress><div class="learning-course-result"><span>${scores.length ? `已公布最高分 ${Math.max(...scores)} 分` : "暂无已公布成绩"}</span><button class="ghost small" data-course-records="${esc(course.id)}">查看此课记录</button></div></article>`;
+    return `<article class="learning-course-card"><div><span class="eyebrow">${esc(course.course_code || "课程学习")}</span><h3>${esc(course.title)}</h3><p class="muted">${esc(course.teaching_class || "默认教学班")} · ${esc(course.teacher)}</p></div><div class="learning-course-progress"><span>已练习 ${practiced} / ${course.chapters.length} 章</span><span>自主练习 ${entries.filter(r=>!r.assignment_id).length} 次 · 作业提交 ${entries.filter(r=>r.assignment_id).length} 次</span></div><progress max="${Math.max(1,course.chapters.length)}" value="${practiced}" aria-label="${esc(courseLabel(course))}章节练习进度"></progress>
+      <div class="learning-course-result"><span>${scores.length ? `已公布最高分 ${Math.max(...scores)} 分` : "暂无已公布成绩"}</span></div>
+      <div class="actions">${link("knowledge-graph", "知识图谱", "secondary small", {course:course.id})}
+      <button class="ghost small" data-course-records="${esc(course.id)}">自主练习记录</button></div></article>`;
   }).join("");
-  const stats = [[profile.course_count,"已参与教学班"],[profile.submission_count,"课程作答"],[number(profile.average_score),"平均成绩"],[profile.weak_points.length,"待巩固知识点"]];
+  const stats = [[profile.course_count,"已参与教学班"],[records.filter(record => !record.assignment_id && record.type !== "ai_quiz").length,"自主练习次数"],
+    [records.filter(record => record.assignment_id).length,"作业提交次数"],[number(profile.average_score),"平均成绩"]];
   const portraitBlock = renderPortrait(portrait);
   const planBadge = plan?.today.plan_total ? `<span>${plan.today.plan_done}/${plan.today.plan_total}</span>` : "";
   layout(`
     <div class="page-heading learning-file-heading">
-      <div><h1>我的学习档案</h1><p class="muted">${esc(user.name)} · ${esc(majorName(user.major_id))}</p></div>
+      <div><h1>学生画像</h1><p class="muted">${esc(user.name)} · ${esc(majorName(user.major_id))}</p></div>
       <button class="ghost" id="learning-file-refresh">${icon("refresh")}刷新</button>
     </div>
     <div class="catalog-stats learning-file-stats">${stats.map(([n,label]) => `<div><b>${n}</b><span>${label}</span></div>`).join("")}</div>
-    <div class="learning-file-tabs" role="tablist" aria-label="学习档案">
+    <div class="learning-file-tabs" role="tablist" aria-label="学生画像">
       ${tabs.map(([id, label, graphic, panel]) => {
         const count = panel === "learning-records" ? records.filter(record => Boolean(record.assignment_id) === (id === "assignments")).length : null;
         return `<button type="button" role="tab" id="learning-${id}-tab" data-learning-tab="${id}" aria-selected="${tab === id}" aria-controls="${panel}">
@@ -104,7 +109,7 @@ export async function learningFilePage(ctx, initialTab = "overview") {
       <div class="section-title"><span class="muted" id="learning-record-count" role="status"></span><button class="ghost small" id="learning-record-clear">清除筛选</button></div>
       <div id="learning-record-list"></div><div class="catalog-pagination" id="learning-record-pagination"></div>
       <details class="section-disclosure"><summary>统计与答案规则</summary><p class="muted">视频 AI 自测不计入课程成绩和雷达图。作业用完提交次数后开放答案、解析和 AI 分析。</p></details>
-    </div>`, "我的学习档案");
+    </div>`, "学生画像");
   let recordPage = 1;
   function renderRecords() {
     const selected = records.filter(record => Boolean(record.assignment_id) === (tab === "assignments") && (filters.course === "all" || record.course_id === filters.course)
@@ -154,8 +159,8 @@ export async function learningFilePage(ctx, initialTab = "overview") {
   root.querySelector("#learning-record-search").oninput=event=>{filters.search=event.target.value;recordPage=1;renderRecords();};
   root.querySelector("#learning-record-clear").onclick=()=>{filters.course="all";filters.type="all";filters.search="";root.querySelector("#learning-record-course").value="all";root.querySelector("#learning-record-type").value="all";root.querySelector("#learning-record-search").value="";recordPage=1;renderRecords();};
   root.querySelector("#learning-file-refresh").onclick=()=>learningFilePage(ctx,tab).catch(error=>tell(error.message));
-  bindLearningPlan(ctx);
   root.querySelector("#learning-record-course").value=filters.course;
   root.querySelector("#learning-record-type").value=filters.type;
   showTab(tab);
+  bindLearningPlan(ctx, plan, tab === "plan" ? graphTarget : null);
 }

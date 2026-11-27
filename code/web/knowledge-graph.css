@@ -16,6 +16,7 @@
 #platform .graph-workspace { align-items:start }
 #platform .graph-workspace .section-title { flex-wrap:wrap; gap:12px }
 #platform .graph-workspace .tag .ui-icon { width:15px; height:15px; margin-inline-end:4px }
+#platform .graph-point-picker { display:none }
 #platform .graph-scroll {
   overflow-x: auto;
   margin-top: 16px;
@@ -29,11 +30,11 @@
   --graph-edge-active: #146c53;
   position: relative;
   display: flex;
-  gap: 44px;
+  gap: 28px;
   align-items: center;
   width: max-content;
   min-width: 100%;
-  padding: 18px;
+  padding: 14px;
 }
 
 #platform .graph-surface canvas {
@@ -48,12 +49,16 @@
   position: relative;
   display: grid;
   gap: 12px;
-  width: 168px;
+  width: 138px;
 }
 
 #platform .graph-point {
+  display:grid;
+  justify-items:start;
+  align-content:center;
+  gap:4px;
   min-height:46px;
-  padding: 10px 13px;
+  padding: 10px 11px;
   border: 1px solid #9fbdad;
   border-radius: 9px;
   background: #fff;
@@ -63,6 +68,39 @@
   text-align: left;
   overflow-wrap: anywhere;
 }
+
+#platform .graph-mastery-summary { display:flex; flex-wrap:wrap; gap:8px; margin:12px 0 0; padding:0; list-style:none }
+#platform .graph-mastery-status {
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  border-radius:6px;
+  padding:3px 8px;
+  color:#455d59;
+  background:#edf1f0;
+  font-size:13px;
+  font-weight:650;
+  white-space:nowrap;
+}
+#platform .graph-mastery-status b { font-size:16px }
+#platform .graph-mastery-status[data-mastery=mastered] { background:#e3f1e9; color:#175f43 }
+#platform .graph-mastery-status[data-mastery=in_progress] { background:#e8f0f8; color:#315a7a }
+#platform .graph-mastery-status[data-mastery=needs_review] { background:#f9efd9; color:#775013 }
+#platform .graph-point .graph-mastery-status { margin:2px 0 0; font-size:12px }
+#platform .graph-mastery-detail {
+  margin:12px 0 16px;
+  padding:16px;
+  border:1px solid #d3e6da;
+  border-radius:12px;
+  background:#f3f8f4;
+}
+#platform .graph-mastery-top { display:flex; align-items:flex-start; justify-content:space-between; flex-wrap:wrap; gap:6px 12px }
+#platform .graph-mastery-top div { display:grid; gap:2px; color:var(--metric-label-color); font-weight:650 }
+#platform .graph-mastery-top b { font-size:36px; color:var(--accent); line-height:1.1; font-variant-numeric:tabular-nums }
+#platform .graph-mastery-detail progress { margin-top:10px }
+#platform .graph-mastery-detail p { color:var(--muted); font-size:14px; margin:8px 0 0 }
+#platform .graph-mastery-detail .actions { margin-top:12px }
+#platform .graph-details h2 { overflow-wrap:anywhere }
 
 #platform .graph-point:not([aria-pressed=true]):hover { border-color:var(--accent); background:#edf7ef }
 #platform .graph-point[aria-pressed="true"] {
@@ -129,7 +167,14 @@
 
 #platform #graph-editor { padding:24px; border:1px solid var(--focus-line); border-radius:var(--panel-radius); background:white }
 
+@media (max-width:1250px) {
+  #platform .graph-point-picker { display:grid; gap:5px; margin-top:14px }
+  #platform .graph-point-picker select { width:100%; min-width:0; max-width:100% }
+}
+
 @media (max-width: 730px) {
+  #platform .knowledge-graph-heading { flex-direction:column; align-items:flex-start; gap:14px }
+  #platform .knowledge-graph-heading .actions { width:100%; justify-content:flex-start; gap:8px }
   #platform .graph-workspace,
   #platform .graph-edit-grid {
     grid-template-columns: minmax(0, 1fr);

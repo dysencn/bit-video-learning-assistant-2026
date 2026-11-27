@@ -32,10 +32,11 @@ from .media import PROFILES
 from .demo_catalog import demo_courses, upgrade_catalog, upgrade_programming_samples, seed_activity, upgrade_practice_solutions
 from .teaching_catalog import upgrade_teaching_samples
 from .demo_assignments import upgrade_assignment_titles
+from .demo_examples import upgrade_demo_examples
 from .assignment_questions import (answers_visible, record_answers_visible, upgrade_independent_assignments, validate_questions)
 from .learning_metrics import (READING_THRESHOLD, build_profiles, scoped_reading_progress,
                                teacher_analytics as aggregate_teacher)
-from .knowledge_graph import build_graph_update, graph_view
+from .knowledge_graph import build_graph_update, graph_view, mastery_plan_order, student_mastery
 from .enrollments import is_enrolled, matches_major, subject_key, upgrade_enrollments, replace_roster
 from .accounts import AccountStore, DEMO_STUDENT, DEMO_TEACHER
 from .summaries import SummaryManager, SummaryError, SUMMARY_CSP
@@ -556,7 +557,7 @@ def plan_week_calendar(week, days, parsed, data, student, saved=None):
             continue
         cards = cards or (entry or {}).get("items") or []
         counts = plan_item_counts(cards)
-        activity = plan_day_activity(data, student, one_day)
+        activity = plan_day_activity(data, student, one_day, bank_since=((saved or {}).get("goal") or {}).get("created_at"))
         view = [{**card, "id": f"{card['kind']}:{card['ref_id']}", "done": plan_task_done(card, activity)}
                 for card in cards]
         rows.append({"date": key, "weekday": PLAN_WEEKDAY_LABELS[one_day.weekday()],
@@ -570,7 +571,7 @@ def plan_day_checkin(data, student, saved, day):
     """某天是否算成功打卡：当天排了任务卡时要求全部完成；没生成任务卡的日子退回「当天有练习或复习」。"""
     cards = (saved.get("tasks") or {}).get(day.isoformat())
     if cards:
-        activity = plan_day_activity(data, student, day)
+        activity = plan_day_activity(data, student, day, bank_since=(saved.get("goal") or {}).get("created_at"))
         done = sum(1 for card in cards if plan_task_done(card, activity))
         return {"date": day.isoformat(), "plan_total": len(cards), "plan_done": done,
                 "complete": done == len(cards), "has_plan": True, "kind": "plan"}
@@ -701,8 +702,68 @@ def _visible_pending_reviews(data, student_id, submissions):
             and record_answers_visible(record, assignments, submissions)]
 
 
-def estimate_plan_workload(data, student, courses):
+def reading_task(course_id, resource, reading):
+    body = str(resource.get("content") or "")
+    resource_id = resource["id"]
+    if not body.strip() or int((reading.get(resource_id) or {}).get("percent") or 0) >= READING_THRESHOLD:
+        return None
+    minutes = PLAN_ESTIMATE["resource_base"] + max(
+        0.0, (len(body) - 300) / PLAN_ESTIMATE["chars_per_minute"])
+    return {"kind": "resource", "course_id": course_id, "ref_id": resource_id,
+            "title": str(resource.get("name") or "学习资料")[:40], "minutes": round(minutes)}
+
+
+def mastery_plan_tasks(data, student, course, focus):
+    """Build actionable tasks for the ordered nodes of one enrolled class."""
+    course_id = course["id"]
+    mastery = student_mastery(course, data, student["id"])
+    order = mastery_plan_order(course, mastery, focus)
+    names = {point["id"]: point["name"] for point in course.get("knowledge_points", [])}
+    reading = (data.get("reading_progress") or {}).get(student["id"]) or {}
+    items, points, seen_resources = [], [], set()
+    questions = _active_questions(course)
+    evidence = (course.get("knowledge_graph") or {}).get("evidence", [])
+    for point_id, prerequisite in order:
+        bank = [question for question in questions if question.get("knowledge_point_id") == point_id]
+        chapters = {question.get("chapter_id") for question in bank}
+        linked_ids = {source["resource_id"] for source in evidence if source["knowledge_point_id"] == point_id}
+        point_items = []
+        for resource in course.get("resources", []):
+            resource_id = resource["id"]
+            if resource_id in seen_resources or (resource_id not in linked_ids
+                                                  and resource.get("chapter_id") not in chapters):
+                continue
+            task = reading_task(course_id, resource, reading)
+            if task:
+                point_items.append({**task, "point": names[point_id]})
+                seen_resources.add(resource_id)
+        if bank:
+            point_items.append({"kind": "practice", "course_id": course_id, "ref_id": point_id,
+                                "point_id": point_id, "point": names[point_id], "title": names[point_id],
+                                "question_ids": [question["id"] for question in bank], "count": len(bank),
+                                "minutes": round(len(bank) * PLAN_ESTIMATE["choice"])})
+        if point_items:
+            items.extend(point_items)
+            points.append({"id": point_id, "name": names[point_id], "prerequisite": prerequisite,
+                           **mastery[point_id]})
+    return items, points
+
+
+def estimate_plan_workload(data, student, courses, graph_target=None):
     """把"学什么"折算成分钟：资料按字数（带兜底）、知识点、单选、编程、到期复习分别计时。"""
+    if graph_target is not None:
+        items, points = mastery_plan_tasks(data, student, courses[0], graph_target.get("point_id")) if courses else ([], [])
+    else:
+        items, points = general_plan_tasks(data, student, courses), []
+    counts, by_kind = {}, {}
+    for item in items:
+        counts[item["kind"]] = counts.get(item["kind"], 0) + 1
+        by_kind[item["kind"]] = by_kind.get(item["kind"], 0) + item["minutes"]
+    return {"items": items, "minutes": sum(item["minutes"] for item in items),
+            "by_kind": by_kind, "counts": counts, "points": points}
+
+
+def general_plan_tasks(data, student, courses):
     sid = student["id"]
     submissions = [item for item in (data.get("submissions") or []) if item.get("student_id") == sid]
     answered = {detail.get("question_id") for item in submissions
@@ -712,16 +773,9 @@ def estimate_plan_workload(data, student, courses):
     for course in courses or []:
         cid = course.get("id")
         for resource in course.get("resources") or []:
-            body = str(resource.get("content") or "")
-            if not body.strip():
-                continue  # 没有正文的资料没有阅读上报点，排进计划就永远完不成
-            if int((reading.get(resource.get("id")) or {}).get("percent") or 0) >= READING_THRESHOLD:
-                continue
-            minutes = PLAN_ESTIMATE["resource_base"] + max(
-                0.0, (len(body) - 300) / PLAN_ESTIMATE["chars_per_minute"])
-            items.append({"kind": "resource", "course_id": cid, "ref_id": resource.get("id"),
-                          "title": str(resource.get("name") or "学习资料")[:40],
-                          "minutes": round(minutes)})
+            task = reading_task(cid, resource, reading)
+            if task:
+                items.append(task)
         names = {kp["id"]: kp.get("name") or "未命名知识点" for kp in course.get("knowledge_points") or []}
         questions = course.get("questions") or []
         for kp_id, kp_name in names.items():
@@ -756,12 +810,7 @@ def estimate_plan_workload(data, student, courses):
                       "title": str(text)[:30], "point": str(record.get("knowledge_point_name") or ""),
                       "due": due_day.isoformat() if due_day else "",
                       "minutes": round(PLAN_ESTIMATE["review"])})
-    counts, by_kind = {}, {}
-    for item in items:
-        counts[item["kind"]] = counts.get(item["kind"], 0) + 1
-        by_kind[item["kind"]] = by_kind.get(item["kind"], 0) + item["minutes"]
-    return {"items": items, "minutes": sum(item["minutes"] for item in items),
-            "by_kind": by_kind, "counts": counts}
+    return items
 
 
 def plan_verdict(workload_minutes, weekly_minutes, weeks):
@@ -810,7 +859,7 @@ def build_plan_weeks(items, parsed, start_day):
     return plans
 
 
-def plan_day_activity(data, student, today):
+def plan_day_activity(data, student, today, *, bank_since=None):
     """今天的完成证据：全部从已有事件和提交记录派生，不加新埋点。"""
     sid = student["id"]
 
@@ -821,17 +870,23 @@ def plan_day_activity(data, student, today):
               if item.get("student_id") == sid and same_day(item.get("ts"))]
     read = {item.get("ref_id") for item in events if item.get("type") == "resource_read"}
     reviewed = {item.get("ref_id") for item in events if item.get("type") == "review"}
-    answers, code_ids = {}, set()
+    answers, code_ids, bank_answers = {}, set(), set()
     for submission in data.get("submissions") or []:
-        if submission.get("student_id") != sid or not same_day(submission.get("submitted_at")):
+        stamp = submission.get("submitted_at")
+        if submission.get("student_id") != sid or not same_day(stamp):
             continue
         if submission.get("type") == "python":
             code_ids.add(submission.get("question_id"))
+        is_current_practice = (not submission.get("assignment_id")
+                               and submission.get("type") not in {"ai_quiz", "python"}
+                               and (bank_since is None or stamp >= bank_since))
         for detail in submission.get("details") or []:
             qid = detail.get("question_id")
             if qid:
                 answers[qid] = bool(answers.get(qid)) or bool(detail.get("correct"))
-    return {"read": read, "reviewed": reviewed, "answered": answers, "code": code_ids}
+                if is_current_practice:
+                    bank_answers.add((submission["course_id"], qid))
+    return {"read": read, "reviewed": reviewed, "answered": answers, "code": code_ids, "bank": bank_answers}
 
 
 def plan_task_done(card, activity):
@@ -843,6 +898,8 @@ def plan_task_done(card, activity):
         return card.get("ref_id") in activity["reviewed"]
     if kind == "practice":
         ids = card.get("question_ids") or []
+        if card.get("point_id"):
+            return bool(ids) and all((card["course_id"], qid) in activity["bank"] for qid in ids)
         return bool(ids) and all(qid in activity["answered"] for qid in ids)
     if kind == "knowledge":
         ids = card.get("question_ids") or []
@@ -866,7 +923,15 @@ def plan_today_cards(items, parsed, data, student, saved, today, days=None):
         for card in cards)
     if stale:
         cards = None
-    activity = plan_day_activity(data, student, today)
+    activity = plan_day_activity(data, student, today, bank_since=(saved.get("goal") or {}).get("created_at"))
+    if cards and parsed.get("graph"):
+        available = {(item["kind"], item["ref_id"]): item for item in items}
+        # Keep credit already earned today. Update outstanding cards if the bank changes.
+        cards = [card if plan_task_done(card, activity)
+                 else {**available[(card["kind"], card["ref_id"])], "id": card["id"]}
+                 for card in cards
+                 if plan_task_done(card, activity) or (card["kind"], card["ref_id"]) in available]
+        tasks[key] = cards
     if cards and any(card["kind"] == "review" for card in cards):
         # A cached daily plan can predate answer-visibility checks.
         reviews = _visible_pending_reviews(data, student["id"], data.get("submissions") or [])
@@ -879,7 +944,9 @@ def plan_today_cards(items, parsed, data, student, saved, today, days=None):
         if scheduled:
             picked = [{**item, "id": f"{item['kind']}:{item['ref_id']}"} for item in scheduled["items"]]
             spent = sum(int(item["minutes"]) for item in picked)
-        if not picked:
+        allowed = (not parsed.get("graph") or
+                   (parsed["start"] <= key < parsed["deadline"] and today.weekday() in parsed["allowed_weekdays"]))
+        if not picked and allowed:
             capacity = int(min((parsed.get("weekly_minutes") or PLAN_DEFAULT_WEEKLY_MINUTES)
                                / max(1, parsed.get("allowed_days") or 7), PLAN_DAILY_CAP_MINUTES))
             due_reviews = [entry for entry in items
@@ -909,6 +976,12 @@ def plan_today_cards(items, parsed, data, student, saved, today, days=None):
             "counts": plan_item_counts(view)}
 
 
+def plan_scope_courses(courses, parsed):
+    if parsed.get("graph"):
+        return [course for course in courses if course["id"] == parsed["graph"]["course_id"]]
+    return [course for course in courses if course["id"] in (parsed.get("course_ids") or [])] or list(courses)
+
+
 def study_plan_goal_view(data, student, courses, moment=None):
     """GET /api/student/plan 的计划部分：目标、工作量、诊断、每周任务、逐日安排与今日任务。"""
     today = local_day(moment)
@@ -918,11 +991,11 @@ def study_plan_goal_view(data, student, courses, moment=None):
         return {"goal": None, "tasks": None, "weeks": [], "week": None,
                 "workload": None, "verdict": None}
     parsed = goal.get("parsed") or {}
-    scope = [course for course in (courses or [])
-             if not parsed.get("course_ids") or course.get("id") in parsed["course_ids"]]
-    if not scope:
-        scope = list(courses or [])
-    workload = estimate_plan_workload(data, student, scope)
+    scope = plan_scope_courses(courses or [], parsed)
+    graph = parsed.get("graph")
+    if graph and not scope:
+        saved.get("tasks", {}).pop(today.isoformat(), None)
+    workload = estimate_plan_workload(data, student, scope, graph)
     verdict = plan_verdict(workload["minutes"],
                            parsed.get("weekly_minutes") or PLAN_DEFAULT_WEEKLY_MINUTES,
                            parsed.get("weeks") or PLAN_DEFAULT_WEEKS)
@@ -942,8 +1015,7 @@ def study_plan_goal_view(data, student, courses, moment=None):
                                   for item in entry["items"]] for plan in weeks}
     return {"goal": {"text": goal.get("text"), "parsed": parsed,
                      "created_at": goal.get("created_at")},
-            "workload": {"minutes": workload["minutes"], "by_kind": workload["by_kind"],
-                         "counts": workload["counts"]},
+            "workload": {key: value for key, value in workload.items() if key != "items"},
             "verdict": verdict,
             "weeks": [{"index": plan["index"], "start": plan["start"], "end": plan["end"],
                        "minutes": plan_item_counts(week_items.get(plan["index"], []))["minutes"],
@@ -1535,6 +1607,8 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                 shutil.copy2(store.path, backup)
             if upgrade_enrollments(store.data, app.state.accounts.students()):
                 store.save()
+        if history_enabled and upgrade_demo_examples(store.data, app.state.accounts.users, record_event):
+            store.save()
         yield
         app.state.programming.close()
         app.state.code_analyses.close()
@@ -2566,13 +2640,18 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             elif assignment.get("time_limit_minutes"):
                 raise HTTPException(409, "请从作业入口开始作答，以记录本次时限")
         else:
-            # 章节练习：传 chapter_id 只判该章题目，不传则整课判分。
+            # 章节和知识点练习都沿用课程自主练习的记录及判分。
             chapter_id = payload.get("chapter_id")
+            point_id = payload.get("knowledge_point_id")
             questions = _active_questions(course)
             if chapter_id is not None:
-                if chapter_id not in {c["id"] for c in course["chapters"]}:
+                if not isinstance(chapter_id, str) or chapter_id not in {c["id"] for c in course["chapters"]}:
                     raise HTTPException(400, "章节不存在")
                 questions = [question for question in questions if question.get("chapter_id") == chapter_id]
+            if point_id is not None:
+                if not isinstance(point_id, str) or point_id not in {p["id"] for p in course["knowledge_points"]}:
+                    raise HTTPException(400, "本教学班没有该知识点")
+                questions = [question for question in questions if question.get("knowledge_point_id") == point_id]
         answers = payload.get("answers", {})
         if not isinstance(answers, dict):
             raise HTTPException(400, "答题数据格式不正确")
@@ -3582,7 +3661,7 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
                       if record.get("student_id") == student["id"])
         plan_view = study_plan_goal_view(data, student,
                                          [course for course in data.get("courses") or []
-                                          if accepts_student(course, student)])
+                                          if course.get("status") == "published" and accepts_student(course, student)])
         checkins = [plan_day_checkin(data, student, saved, today - timedelta(days=offset))
                     for offset in range(STUDY_CALENDAR_DAYS - 1, -1, -1)]
         checkin_days = {item["date"]: {"submissions": 1 if item["complete"] else 0, "reviews": 0}
@@ -3682,12 +3761,6 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
             store.save()
             return study_plan_payload(store, student)
 
-    def plan_scope_courses(courses, parsed):
-        """目标里点名了课程就只算那几门，否则按全部可见课程。"""
-        scope = [course for course in courses
-                 if not parsed.get("course_ids") or course["id"] in parsed["course_ids"]]
-        return scope or list(courses)
-
     def apply_plan_budget(parsed, payload):
         """Use the same budget for the preview and the saved plan."""
         for key, low, high, label in (("weeks", 1, PLAN_MAX_WEEKS, "周期（周）"),
@@ -3709,25 +3782,44 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         parsed["deadline"] = (local_day(parsed["start"]) + timedelta(days=parsed["weeks"] * 7)).isoformat()
         return parsed
 
+    def requested_plan(payload, courses):
+        text = str(payload.get("text") or "").strip()
+        graph = payload.get("graph")
+        if graph is None:
+            if len(text) < 4:
+                raise HTTPException(400, '请用一句话写清目标，例如“4 周内掌握 Python 的循环和函数”')
+            return apply_plan_budget(parse_plan_text(text, courses), payload)
+        if (not isinstance(graph, dict) or not isinstance(graph.get("course_id"), str)
+                or (graph.get("point_id") is not None and not isinstance(graph["point_id"], str))):
+            raise HTTPException(400, "知识图谱计划的课程或知识点格式无效")
+        course = next((item for item in courses if item["id"] == graph["course_id"]), None)
+        if course is None:
+            raise HTTPException(404, "课程不存在或尚未发布")
+        point_id = graph.get("point_id")
+        point = next((item for item in course["knowledge_points"] if item["id"] == point_id), None)
+        if point_id is not None and point is None:
+            raise HTTPException(404, "本教学班没有该知识点")
+        default_target = point["name"] if point else f"《{course['title']}》知识点"
+        parsed = apply_plan_budget(parse_plan_text(text or f"巩固{default_target}", [course]), payload)
+        parsed.update(course_ids=[course["id"]], graph={"course_id": course["id"], "point_id": point_id},
+                      source="mastery", notes=[note for note in parsed["notes"] if not note.startswith("没匹配到")])
+        return parsed
+
     @app.post("/api/student/plan/parse")
     async def parse_student_plan_goal(request: Request):
         """把一句话解析成目标并给出工作量诊断，不落库。"""
         student = require_role(request, "student")
         payload = await json_object(request)
-        text = str(payload.get("text") or "").strip()
-        if len(text) < 4:
-            raise HTTPException(400, '请用一句话写清目标，例如"4 周内掌握 Python 的循环和函数"')
         store = request.app.state.learning
         with store.lock:
             courses = [course for course in store.data.get("courses") or []
-                       if accepts_student(course, student)]
-            parsed = apply_plan_budget(parse_plan_text(text, courses), payload)
+                       if course.get("status") == "published" and accepts_student(course, student)]
+            parsed = requested_plan(payload, courses)
             scope = plan_scope_courses(courses, parsed)
-            workload = estimate_plan_workload(store.data, student, scope)
+            workload = estimate_plan_workload(store.data, student, scope, parsed.get("graph"))
             verdict = plan_verdict(workload["minutes"], parsed["weekly_minutes"], parsed["weeks"])
             return {"parsed": parsed,
-                    "workload": {"minutes": workload["minutes"], "by_kind": workload["by_kind"],
-                                 "counts": workload["counts"]},
+                    "workload": {key: value for key, value in workload.items() if key != "items"},
                     "verdict": verdict,
                     "courses": [{"id": course["id"], "title": course["title"],
                                  "teaching_class": course.get("teaching_class")} for course in scope]}
@@ -3737,22 +3829,29 @@ def create_app(data_dir: Path | None = None, *, seed_demo_history: bool | None =
         """确认生成：落库目标与解析结果，清空旧任务让今日卡按新目标重算。"""
         student = require_role(request, "student")
         payload = await json_object(request)
-        text = str(payload.get("text") or "").strip()
-        if len(text) < 4:
-            raise HTTPException(400, '请用一句话写清目标，例如"4 周内掌握 Python 的循环和函数"')
         store = request.app.state.learning
         with store.lock:
             courses = [course for course in store.data.get("courses") or []
-                       if accepts_student(course, student)]
-            parsed = apply_plan_budget(parse_plan_text(text, courses), payload)
+                       if course.get("status") == "published" and accepts_student(course, student)]
+            parsed = requested_plan(payload, courses)
+            if parsed.get("graph") and not estimate_plan_workload(
+                    store.data, student, plan_scope_courses(courses, parsed), parsed["graph"])["items"]:
+                raise HTTPException(409, "所选范围暂无需要安排的讲义或练习，请重新选择知识点")
             plans = store.data.setdefault("study_plans", {})
-            entry = plans.setdefault(student["id"], {})
-            entry["goal"] = {"text": text, "parsed": parsed, "created_at": LearningStore.now()}
-            entry["tasks"] = {}
-            entry["updated_at"] = LearningStore.now()
-            store.save()
-            view = study_plan_payload(store, student)
-            store.save()  # 今日任务卡在读取时才生成，这里补一次落盘
+            previous = plans.get(student["id"])
+            stamp = LearningStore.now()
+            text = str(payload.get("text") or "").strip() or parsed["text"]
+            plans[student["id"]] = {**(previous or {}), "tasks": {}, "updated_at": stamp,
+                                    "goal": {"text": text, "parsed": parsed, "created_at": stamp}}
+            try:
+                view = study_plan_payload(store, student)
+                store.save()
+            except OSError:
+                if previous is None:
+                    plans.pop(student["id"], None)
+                else:
+                    plans[student["id"]] = previous
+                raise HTTPException(507, "计划保存失败，请检查磁盘后重试") from None
             return view
 
     @app.delete("/api/student/plan/goal")

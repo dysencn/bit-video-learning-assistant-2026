@@ -1,7 +1,7 @@
 import {teacherProgramming, bindTeacherProgramming, programmingPage, programmingRecord} from "/static/programming.js";
 import {quizPage} from "/static/ai-quiz.js";
 import {analysisLink, analysisPage, programmingAdvicePage} from "/static/analysis.js";
-import { esc, icon, number, radarCard, assignmentSubmissionText } from "/static/ui.js";
+import { esc, icon, number, assignmentSubmissionText } from "/static/ui.js";
 import { analyticsPage, reviewCenter } from "/static/learning-pages.js";
 import { assignmentsPage, assignmentDetailPage, gradebookPage, studentDetailPage,
          announcementsPage } from "/static/course-pages.js";
@@ -80,7 +80,7 @@ function nav() {
   const item = (view, label, graphic) => `<a class="nav-link${current(view) ? " active" : ""}"
     href="${esc(href(view))}" target="_blank" rel="noopener" ${current(view) ? 'aria-current="page"' : ""}>${icon(graphic)}<span>${label}</span></a>`;
   return `<header class="nav"><a class="brand" href="${esc(user ? href("dashboard") : "/")}"><span class="brand-mark">${icon("layers")}</span><span>知学</span></a>
-    ${user ? `<nav class="nav-links" aria-label="主导航">${item("dashboard", "工作台", "home")}${item("video", "视频学习", "video")}${item("live-quiz", "课堂抢答", "target")}${user.role === "teacher" ? item("teaching", "课程与作业", "book") + item("records", "学情总览", "chart") : item("assignments", "作业", "book") + item("review-center", "错题与复习", "review") + item("learning-center", "学习档案", "chart")}${item("account", "账号", "user")}</nav><div class="nav-account"><a class="nav-bell" href="${esc(href("announcements"))}" target="_blank" rel="noopener" aria-label="公告">${icon("bell")}${unreadAnnouncements ? `<span class="nav-badge">${unreadAnnouncements > 99 ? "99+" : unreadAnnouncements}</span>` : ""}</a><span class="avatar small">${esc(user.name.slice(0,1))}</span><span class="identity">${esc(user.name)}<small>${user.role === "teacher" ? "教师 · 跨专业授课" : esc(majorName(user.major_id))}</small></span><button class="ghost" id="logout">退出</button></div>` : ""}</header><div class="notice" role="status" hidden></div>`;
+    ${user ? `<nav class="nav-links" aria-label="主导航">${item("dashboard", "工作台", "home")}${item("video", "视频学习", "video")}${item("live-quiz", "课堂抢答", "target")}${user.role === "teacher" ? item("teaching", "课程与作业", "book") + item("records", "学情总览", "chart") : item("assignments", "作业", "book") + item("review-center", "错题与复习", "review") + item("learning-center", "学生画像", "chart")}${item("account", "账号", "user")}</nav><div class="nav-account"><a class="nav-bell" href="${esc(href("announcements"))}" target="_blank" rel="noopener" aria-label="公告">${icon("bell")}${unreadAnnouncements ? `<span class="nav-badge">${unreadAnnouncements > 99 ? "99+" : unreadAnnouncements}</span>` : ""}</a><span class="avatar small">${esc(user.name.slice(0,1))}</span><span class="identity">${esc(user.name)}<small>${user.role === "teacher" ? "教师 · 跨专业授课" : esc(majorName(user.major_id))}</small></span><button class="ghost" id="logout">退出</button></div>` : ""}</header><div class="notice" role="status" hidden></div>`;
 }
 function layout(content, title) {
   document.title = `${title} · 知学`;
@@ -212,7 +212,7 @@ async function dashboard() {
   const title = `${user.name}的工作台`;
   const buttons = teacher
     ? link("new-course", `${icon("plus")}新建教学班`, "primary") + link("teaching", "课程与作业")
-    : link("learning-center", `${icon("chart")}学习档案`, "primary") + link("assignments", "我的作业") + link("video", "整理课程视频");
+    : link("learning-center", `${icon("chart")}学生画像`, "primary") + link("assignments", "我的作业") + link("video", "整理课程视频");
   layout(`
     <div class="hero dashboard-hero">
       <div><h1>${esc(title)}</h1>${teacher ? "" : `<p class="muted">${esc(majorName(user.major_id))}</p>`}
@@ -272,24 +272,35 @@ function trackReading() {
   });
 }
 
+function coursePractice(questions, {chapterId, pointId, preview}) {
+  if (!questions.length) return '<p class="muted">暂无单选练习。</p>';
+  const items = questions.map((q, index) => `<fieldset class="question" ${preview ? "disabled" : `data-question="${esc(q.id)}"`}>
+    <legend>${index + 1}. ${esc(q.text)}</legend>
+    ${q.options.map((option, choice) => `<label class="option"><input type="radio" ${preview ? "disabled" : `name="${esc(q.id)}" value="${choice}" required`}> ${String.fromCharCode(65 + choice)}. ${esc(option)}</label>`).join("")}
+    ${Number.isInteger(q.answer) ? `<details class="bank-solution"><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("");
+  if (preview) return `<div class="quiz preview-quiz"><div class="questions">${items}</div></div>`;
+  return `<form class="quiz" ${pointId ? `data-point="${esc(pointId)}"` : `data-chapter="${esc(chapterId)}"`}>
+    <div class="questions">${items}</div><div class="actions"><button class="primary" type="submit">${pointId ? "提交专项练习" : "提交本章练习"}</button></div>
+    <div class="quiz-result" role="status"></div></form>`;
+}
+
 async function learningPage() {
   const preview = params.get("preview") === "1";
   if (user.role !== "student" && !(user.role === "teacher" && preview)) throw new Error("请使用学生账号打开学习页面");
   const courseId = encodeURIComponent(params.get("course") || "");
   const course = await api(preview ? `/api/courses/${courseId}/preview` : `/api/courses/${courseId}`);
-  const assignments = user.role === "student" ? await api("/api/assignments").catch(() => []) : [];
+  const pointId = preview ? null : params.get("point");
+  const point = pointId ? course.knowledge_points.find(item => item.id === pointId) : null;
+  if (pointId && !point) throw new Error("本教学班没有该知识点");
+  const assignments = user.role === "student" && !point ? await api("/api/assignments").catch(() => []) : [];
   const chapters = course.chapters || [];
-  const chapterBlocks = chapters.map((ch, ci) => {
+  const chapterBlocks = point ? "" : chapters.map((ch, ci) => {
     const resources = course.resources.filter(r => r.chapter_id === ch.id);
     const questions = course.questions.filter(q => q.chapter_id === ch.id);
     const programming = (course.programming_questions || []).filter(q => q.chapter_id === ch.id);
     const chapterAssignments = assignments.filter(item => item.course_id === course.id && item.chapter_id === ch.id);
     const assignmentBlock = chapterAssignments.length ? `<div class="chapter-assignments">${chapterAssignments.map(item => `<article class="assignment-card compact"><div class="assignment-card-head"><span class="tag ${assignmentStateClass(assignmentDisplayState(item))}">${assignmentStateLabel(assignmentDisplayState(item))}</span><small>${esc(item.course_name)}</small></div><div class="assignment-card-body"><b>${esc(item.title)}</b><p class="muted">${item.due_at ? `截止 ${date(item.due_at)}` : "未设置截止时间"} · ${assignmentSubmissionText(item)}${item.pending_release ? " · 待发布成绩" : ""}</p></div><div class="actions">${item.can_start ? link("assignment", "开始作业", "primary", {assignment:item.id}) : link("assignment", "查看作业", "secondary", {assignment:item.id})}</div></article>`).join("")}</div>` : "";
-    const questionBlock = questions.length
-      ? (preview
-        ? `<div class="quiz preview-quiz"><p class="preview-note">学生视角预览：可查看题库标答与解析，不能提交。</p><div class="questions">${questions.map((q, i) => `<fieldset class="question" disabled><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" disabled> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div></div>`
-        : `<form class="quiz" data-chapter="${esc(ch.id)}"><div class="questions">${questions.map((q, i) => `<fieldset class="question" data-question="${esc(q.id)}"><legend>${i + 1}. ${esc(q.text)}</legend>${q.options.map((option, oi) => `<label class="option"><input type="radio" name="${esc(q.id)}" value="${oi}" required> ${String.fromCharCode(65 + oi)}. ${esc(option)}</label>`).join("")}${Number.isInteger(q.answer) ? `<details class="bank-solution"><summary>查看标准答案与解析</summary><p>标准答案：${String.fromCharCode(65+q.answer)}. ${esc(q.options[q.answer])}</p><p>${esc(q.explanation || "暂无解析")}</p></details>` : ""}</fieldset>`).join("")}</div><div class="actions"><button class="primary" type="submit">提交本章练习</button></div><div class="quiz-result" role="status"></div></form>`)
-      : '<p class="muted">本章暂无单选题。</p>';
+    const questionBlock = coursePractice(questions, {chapterId:ch.id, preview});
     return `<section class="chapter" id="chapter-${esc(ch.id)}"><div class="section-title"><div><span class="eyebrow">CHAPTER ${ci + 1}</span><h2>${esc(ch.title)}</h2></div><span class="tag">${questions.length} 道单选 · ${programming.length} 道编程</span></div>
       ${preview ? '<p class="preview-note">此页面为学生视角预览，可查看自主练习标答，隐藏判题用例。</p>' : ""}
       ${assignmentBlock}
@@ -299,7 +310,15 @@ async function learningPage() {
       ${programming.map(q => `<div class="python-question-link"><div><b>${esc(q.title)}</b><small>Python 编程 · 3 秒 / 256 MB</small></div>${preview ? '<span class="tag neutral">学生可编写代码</span>' : link("programming", "编写代码", "primary", {course:course.id, question:q.id})}</div>`).join("")}
     </section>`;
   }).join("");
-  layout(`<div class="learning-panel">${preview ? '<div class="preview-banner">学生视角预览 · 不可提交</div>' : ""}<span class="eyebrow">${esc(course.teacher)} · ${esc(course.chapters.length)} 个章节 · COURSE LEARNING</span><h1>${esc(course.title)}</h1>${course.teaching_class ? `<p class="dashboard-class-label">${esc([course.teaching_class, course.term].filter(Boolean).join(" · "))}</p>` : ""}<p class="muted">${esc(course.description)}</p>${preview ? "" : `<div class="actions">${link("knowledge-graph", "查看学习顺序", "secondary", {course:course.id})}</div>`}${chapterBlocks}<div class="actions">${preview ? link("edit-course", "返回课程编辑", "primary", {course:course.id}) : link("learning-center", "查看学生画像")}</div></div>`, `${course.title}${preview ? " · 预览" : ""}`);
+  if (point) {
+    const title = `${point.name} · 专项练习`;
+    layout(`<div class="page-heading"><div><h1>${esc(title)}</h1>
+      <p class="muted">${esc(courseLabel(course))}</p></div>
+      ${link("knowledge-graph", "返回知识图谱", "secondary", {course:course.id, point:point.id})}</div>
+      <section class="learning-panel">${coursePractice(course.questions.filter(q => q.knowledge_point_id === point.id), {pointId:point.id})}</section>`, title);
+  } else {
+    layout(`<div class="learning-panel">${preview ? '<div class="preview-banner">学生视角预览 · 不可提交</div>' : ""}<span class="eyebrow">${esc(course.teacher)} · ${esc(course.chapters.length)} 个章节 · COURSE LEARNING</span><h1>${esc(course.title)}</h1>${course.teaching_class ? `<p class="dashboard-class-label">${esc([course.teaching_class, course.term].filter(Boolean).join(" · "))}</p>` : ""}<p class="muted">${esc(course.description)}</p>${preview ? "" : `<div class="actions">${link("knowledge-graph", `${icon("target")}知识图谱`, "secondary", {course:course.id})}</div>`}${chapterBlocks}<div class="actions">${preview ? link("edit-course", "返回课程编辑", "primary", {course:course.id}) : link("learning-center", "查看学生画像")}</div></div>`, `${course.title}${preview ? " · 预览" : ""}`);
+  }
   const resource = params.get("resource");
   const chapter = params.get("chapter");
   if (resource || chapter) {
@@ -324,8 +343,9 @@ async function learningPage() {
       button.disabled = true;
       const answers = Object.fromEntries([...new FormData(form)].map(([id, value]) => [id, Number(value)]));
       try {
-        const result = await post(`/api/courses/${course.id}/submissions`, {chapter_id: form.dataset.chapter, answers});
-        form.querySelector(".quiz-result").innerHTML = `<div class="result"><h2>本章得分 ${result.score} 分</h2><p>答对 ${result.correct_count}/${result.total} 题，已保存到个人学习记录。</p>${result.details.map((d, i) => `<p>${d.correct ? "✓" : "✗"} ${i + 1}. ${esc(d.text)} · 正确答案：${esc(d.options[d.answer])}${d.explanation ? `<small class="answer-explanation">${esc(d.explanation)}</small>` : ""}</p>`).join("")}</div>`;
+        const scope = form.dataset.point ? {knowledge_point_id:form.dataset.point} : {chapter_id:form.dataset.chapter};
+        const result = await post(`/api/courses/${course.id}/submissions`, {...scope, answers});
+        form.querySelector(".quiz-result").innerHTML = `<div class="result"><h2>${form.dataset.point ? "专项" : "本章"}得分 ${result.score} 分</h2><p>答对 ${result.correct_count}/${result.total} 题，已保存到自主练习记录。</p>${result.details.map((d, i) => `<p>${d.correct ? "✓" : "✗"} ${i + 1}. ${esc(d.text)} · 正确答案：${esc(d.options[d.answer])}${d.explanation ? `<small class="answer-explanation">${esc(d.explanation)}</small>` : ""}</p>`).join("")}</div>`;
         form.querySelector(".quiz-result").insertAdjacentHTML("beforeend", `<div class="actions">${analysisLink(link, result.id)}</div>`);
         form.querySelector(".quiz-result").scrollIntoView({behavior:"smooth", block:"nearest"});
       } catch (error) { tell(error.message); }

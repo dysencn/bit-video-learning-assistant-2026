@@ -3,6 +3,85 @@ from datetime import datetime, timedelta, timezone
 import re
 import hashlib
 
+from .learning_metrics import _timestamp
+
+
+ASSIGNMENT_EXAMPLES = {
+    "PY101": (("数据类型辨识挑战", "成绩单输出排错", "学生通讯录案例"),
+              "校园借阅系统代码巡检", "要根据读者编号快速查询借阅记录，哪种设计最合适？",
+              ["用编号作字典的键", "把所有编号拼成一个字符串", "每次重新录入记录", "用布尔值保存编号"],
+              "字典用唯一的读者编号作键，可以直接查找对应记录。"),
+    "WEB101": (("社团招新页结构诊断", "作品展布局检查", "报名表交互排障"),
+               "校园活动报名页验收", "为报名表输入框设置可访问的标签，应该使用哪种写法？",
+               ["用 label 的 for 对应输入框 id", "只用颜色区分输入框", "把说明写在注释中", "只显示一个图标"],
+               "显式关联标签让读屏软件能够读出输入框的用途，也便于点击聚焦。"),
+    "DL101": (("一次手算前向传播", "训练曲线诊断练习", "模型泛化实验复盘"),
+              "图像分类模型验收", "完成训练和调参后，应该用哪一份数据报告模型的最终表现？",
+              ["预留的独立测试集", "训练集", "反复用于调参的验证集", "从训练集中选出的高分样本"],
+              "独立测试集未参与训练或调参，用于估计模型在未见数据上的表现。"),
+}
+
+
+def upgrade_assignment_examples(data, samples, now):
+    """Rename and schedule generated assignments while keeping editable and real evidence intact."""
+    protected = {item.get("assignment_id") for key in ("submissions", "assignment_attempts")
+                 for item in data.get(key, []) if not item.get("demo")}
+    latest = {}
+    for record in data.get("submissions", []):
+        assignment_id, stamp = record.get("assignment_id"), _timestamp(record.get("submitted_at"))
+        if assignment_id and stamp and (assignment_id not in latest or stamp > latest[assignment_id]):
+            latest[assignment_id] = stamp
+    assignments = data["assignments"]
+    by_course = {course["id"]: course for course in data["courses"] if course.get("demo")}
+    ids = {item["id"] for item in assignments}
+    for sample in samples:
+        course_id = sample["id"]
+        course = by_course.get(course_id)
+        if not course or course["status"] != "published":
+            continue
+        names, title, prompt, options, explanation = ASSIGNMENT_EXAMPLES[sample["course_code"]]
+        chapters = {item["id"]: (index, name, item["title"])
+                    for index, (item, name) in enumerate(zip(sample["chapters"], names))}
+        examples = [item for item in assignments if item["course_id"] == course_id
+                    and item.get("demo") and item["id"].startswith(f"demo-assignment-{course_id}-")]
+        for item in examples:
+            chapter = chapters.get(item.get("chapter_id"))
+            if (chapter is None or item["status"] != "published" or item["id"] in protected
+                    or item.get("updated_at") != item.get("created_at")):
+                continue
+            index, name, chapter_title = chapter
+            kind = re.fullmatch(re.escape(chapter_title) + r" · (课后作业|历史作业)(?:（演示）)?", item["title"])
+            if not kind:
+                continue
+            historic = kind[1] == "历史作业"
+            item["title"] = f"{name} · 补测" if historic else name
+            if item.get("description") == "按章节完成单选题，提交后查看得分与解析。":
+                item["description"] = "结合题目中的案例选择答案，每次提交后可查看得分。"
+            past_due = now - timedelta(days=1)
+            last_attempt = latest.get(item["id"])
+            if (historic or index == 0) and (last_attempt is None or last_attempt < past_due):
+                item["due_at"] = past_due.isoformat()
+            else:
+                item["due_at"] = (now + timedelta(days=21 if index == 1 else 28)).isoformat()
+
+        assignment_id = f"demo-assignment-{course_id}-application"
+        chapter_id = sample["chapters"][-1]["id"]
+        if (not examples or assignment_id in ids
+                or chapter_id not in {item["id"] for item in course.get("chapters", [])}):
+            continue
+        stamp = now.isoformat()
+        assignments.append({
+            "id": assignment_id, "course_id": course_id, "teacher_id": course["teacher_id"],
+            "title": title, "description": "阅读应用场景，选出最合适的处理方式。",
+            "chapter_id": chapter_id, "questions": [{"id": f"aq-{assignment_id}-1", "text": prompt,
+                "options": list(options), "answer": 0, "explanation": explanation, "chapter_id": chapter_id}],
+            "status": "published", "open_at": (now + timedelta(days=2)).isoformat(),
+            "due_at": (now + timedelta(days=16)).isoformat(), "close_at": None,
+            "max_attempts": 2, "time_limit_minutes": 15, "allow_late": False,
+            "late_max_days": 0, "late_penalty_percent_per_day": 0, "grade_release": "immediate",
+            "grades_released_at": None, "created_at": stamp, "updated_at": stamp, "demo": True,
+        })
+
 
 def upgrade_assignment_titles(data):
     """Remove the old suffix from generated assignment titles, preserving custom titles."""

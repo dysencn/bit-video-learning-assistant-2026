@@ -1,4 +1,4 @@
-import {esc, icon} from "/static/ui.js";
+import {esc, icon, masteryLabels, progressBar} from "/static/ui.js";
 import {workspaceNav} from "/static/teacher-workspace.js";
 
 const options = (items, placeholder) => `<option value="">${placeholder}</option>${items.map(
@@ -186,7 +186,7 @@ function editor(ctx, graph, course, jobs, reload) {
 }
 
 export async function knowledgeGraphPage(ctx, initialPoint) {
-  const {api, date, fileUrl, href, layout, link, params, root, user, tell} = ctx;
+  const {api, date, fileUrl, layout, link, params, root, user, tell} = ctx;
   const courseId = params.get("course") || "";
   const courseApi = `/api/courses/${encodeURIComponent(courseId)}`;
   const teacher = user.role === "teacher";
@@ -198,22 +198,37 @@ export async function knowledgeGraphPage(ctx, initialPoint) {
   const requested = initialPoint || params.get("point");
   let active = nodes.has(requested) ? requested : graph.nodes[0]?.id;
   const columns = graphColumns(graph.nodes, graph.prerequisites);
+  const planLink = (label, style, point) => link("learning-center", label, style,
+    {tab:"plan", graph_course:courseId, ...(point ? {graph_point:point} : {})});
+  const title = teacher ? "学习顺序" : "知识图谱";
+  const summary = teacher ? "" : Object.entries(masteryLabels).map(([status, label]) => {
+    const count = graph.nodes.filter(node => node.mastery.status === status).length;
+    return `<li class="graph-mastery-status" data-mastery="${status}">${label} <b>${count}</b></li>`;
+  }).join("");
   layout(`${teacher ? workspaceNav(ctx, course, "knowledge-graph") : ""}
-    <div class="page-heading"><div><h1>学习顺序</h1>${teacher ? "" : `<p class="muted">${esc(graph.title)}${graph.teaching_class ? ` · ${esc(graph.teaching_class)}` : ""}</p>`}</div>
-    <div class="actions">${teacher ? "" : link("course", "返回课程", "secondary", {course:courseId})}
+    <div class="page-heading knowledge-graph-heading"><div><h1>${title}</h1>${teacher ? "" : `<p class="muted">${esc(graph.title)}${graph.teaching_class ? ` · ${esc(graph.teaching_class)}` : ""}</p>`}</div>
+    <div class="actions">${!teacher && graph.nodes.some(node => node.mastery.status !== "mastered") ? planLink(`${icon("target")}生成补弱计划`, "primary") : ""}
+    ${teacher ? "" : link("course", "返回课程", "secondary", {course:courseId})}
     <button id="refresh-graph" class="ghost" type="button">${icon("refresh")}刷新</button></div></div>
     ${columns.length ? `<div class="graph-workspace"><section class="editor"><div class="section-title"><h2>知识点</h2><span class="tag neutral">${graph.prerequisites.length ? `${icon("arrow")}先修关系` : "暂无先修关系"}</span></div>
-      <div class="graph-scroll"><div class="graph-surface"><canvas aria-hidden="true"></canvas>
-        ${columns.map(column => `<div class="graph-column">${column.map(node =>
-          `<button type="button" class="graph-point" data-graph-point="${esc(node.id)}" aria-pressed="false">${esc(node.name)}</button>`
-        ).join("")}</div>`).join("")}</div></div></section><section class="editor graph-details" id="graph-point-details" aria-live="polite"></section></div>`
+      ${summary ? `<ul class="graph-mastery-summary" aria-label="掌握情况">${summary}</ul>` : ""}
+      <label class="graph-point-picker">定位知识点<select id="graph-point-picker">${graph.nodes.map(node =>
+        `<option value="${esc(node.id)}">${esc(node.name)}</option>`).join("")}</select></label>
+      <div class="graph-scroll" tabindex="0" aria-label="知识点关系图"><div class="graph-surface"><canvas aria-hidden="true"></canvas>
+        ${columns.map(column => `<div class="graph-column">${column.map(node => {
+          const mastery = node.mastery;
+          return `<button type="button" class="graph-point" data-graph-point="${esc(node.id)}" aria-pressed="false" aria-controls="graph-point-details"><span>${esc(node.name)}</span>
+            ${mastery ? `<small class="graph-mastery-status" data-mastery="${esc(mastery.status)}">${masteryLabels[mastery.status]}${mastery.score == null ? "" : ` · ${mastery.score}%`}</small>` : ""}</button>`;
+        }).join("")}</div>`).join("")}</div></div></section><section class="editor graph-details" id="graph-point-details" aria-live="polite"></section></div>`
       : `<div class="empty-state"><h2>本班暂无知识点</h2>${graph.editable ? link("edit-course", "在课程题库添加知识点", "secondary", {course:courseId, section:"questions"}) : ""}</div>`}
-    ${graph.editable && columns.length ? '<section class="editor" id="graph-editor"></section>' : ""}`, "学习顺序");
+    ${graph.editable && columns.length ? '<section class="editor" id="graph-editor"></section>' : ""}`, title);
   const canvas = root.querySelector(".graph-surface canvas");
   const drawing = canvas ? showGraph(canvas, graph.nodes, graph.prerequisites) : null;
+  const picker = root.querySelector("#graph-point-picker");
   const renderPoint = id => {
     active = id;
     const point = nodes.get(id);
+    picker.value = id;
     for (const button of root.querySelectorAll("[data-graph-point]")) {
       button.setAttribute("aria-pressed", String(button.dataset.graphPoint === id));
     }
@@ -235,21 +250,38 @@ export async function knowledgeGraphPage(ctx, initialPoint) {
       {course:courseId, knowledge_point_id:id, tab:new Date(point.next_review_at) <= now ? "today" : "all"}) : "";
     const announcement = teacher && course.status === "published"
       ? link("announcements", "发布知识点讲评", "secondary", {course:courseId, knowledge_point:point.name}) : "";
+    const mastery = point.mastery;
+    const practice = mastery?.question_count
+      ? link("course", `${icon("check")}专项练习`, "primary", {course:courseId, point:id}) : "";
+    const statistics = `<dl class="graph-statistics">
+      <div><dt>累计自主练习</dt><dd>${point.answered ? `${point.correct} / ${point.answered} 题答对 · ${point.accuracy}%` : "暂无作答"}</dd></div>
+      <div><dt>复习次数</dt><dd>${point.review_count} 次${point.review_count ? ` · 答对 ${point.review_correct} 次` : ""}</dd></div>
+      ${!teacher && point.next_review_at ? `<div><dt>最早到期</dt><dd>${esc(date(point.next_review_at))} · ${point.pending_review_count} 道待巩固</dd></div>` : ""}
+    </dl>`;
     root.querySelector("#graph-point-details").innerHTML = `<h2>${esc(point.name)}</h2>
+      ${mastery ? `<div class="graph-mastery-detail"><div class="graph-mastery-top"><div><span>我的掌握度</span>
+        <b>${mastery.score == null ? "—" : `${mastery.score}%`}</b></div>
+        <span class="graph-mastery-status" data-mastery="${esc(mastery.status)}">${masteryLabels[mastery.status]}</span></div>
+        ${mastery.score == null ? "" : progressBar(mastery.score, "知识点掌握度")}
+        <p>${mastery.question_count ? `已测 ${mastery.assessed} / ${mastery.question_count} 题${mastery.assessed ? ` · 最近答对 ${mastery.correct} 题` : ""}` : "本节点暂无可测评的练习题"}</p>
+        <div class="actions">${practice}${mastery.status === "mastered" ? "" : planLink("为此节点做计划", practice ? "secondary" : "primary", id)}</div></div>` : ""}
       ${earlier.length || later.length ? `<dl class="graph-sequence">
         ${earlier.length ? `<div><dt>先修</dt><dd>${esc(earlier.join("、"))}</dd></div>` : ""}
         ${later.length ? `<div><dt>后续</dt><dd>${esc(later.join("、"))}</dd></div>` : ""}</dl>` : ""}
-      <dl class="graph-statistics">
-        <div><dt>自主练习</dt><dd>${point.answered ? `${point.correct} / ${point.answered} 题答对 · ${point.accuracy}%` : "暂无作答"}</dd></div>
-        <div><dt>复习次数</dt><dd>${point.review_count} 次${point.review_count ? ` · 答对 ${point.review_correct} 次` : ""}</dd></div>
-        ${!teacher && point.next_review_at ? `<div><dt>下次复习</dt><dd>${esc(date(point.next_review_at))} · ${point.pending_review_count} 道待巩固</dd></div>` : ""}
-      </dl><h3>学习材料</h3>${sources ? `<ul class="graph-source-list">${sources}</ul>` : '<p class="muted">暂无已确认的材料</p>'}
-      <div class="actions">${point.practice_chapters.map(chapter => link("course",
-        `${teacher ? "预览" : "练习"} · ${esc(chapter.title)}`, "secondary", {course:courseId, chapter:chapter.id, ...(teacher ? {preview:"1"} : {})})).join("")}
-        ${reviewLink}${announcement}</div>`;
+      ${teacher ? statistics : ""}
+      <h3>学习材料</h3>${sources ? `<ul class="graph-source-list">${sources}</ul>` : '<p class="muted">暂无已确认的材料</p>'}
+      <div class="actions">${teacher ? point.practice_chapters.map(chapter => link("course",
+        `预览 · ${esc(chapter.title)}`, "secondary", {course:courseId, chapter:chapter.id, preview:"1"})).join("") : ""}
+        ${reviewLink}${announcement}</div>
+      ${mastery ? `<details class="section-disclosure"><summary>练习与复习统计</summary>${statistics}
+        <p class="muted">掌握度取每道自主练习题最近的判分（含错题复习）。当前题目均有判分且正确率达到 ${graph.mastery_threshold}% 时标为已掌握。</p></details>` : ""}`;
   };
   if (active) {
     renderPoint(active);
+    picker.onchange = () => {
+      renderPoint(picker.value);
+      root.querySelector(`[data-graph-point="${CSS.escape(picker.value)}"]`).scrollIntoView({block:"nearest", inline:"nearest"});
+    };
     root.querySelectorAll("[data-graph-point]").forEach(button => {
       button.onclick = () => renderPoint(button.dataset.graphPoint);
     });

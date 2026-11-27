@@ -28,7 +28,7 @@ export async function analysisPage(ctx, recordId, autoStart, options={}) {
   const description = options.description || "根据本次全部题目、学生作答和判分结果生成错题解析、掌握情况与复习建议。";
   const backLink = options.backLink || (user.role === "teacher" && ctx.params.get("course")
     ? link("teaching-ai", "返回课程 AI 分析", "secondary", {course:ctx.params.get("course")})
-    : user.role === "teacher" ? link("records", "返回学情总览", "secondary") : link("learning-center", "返回学习档案", "secondary", {tab:ctx.params.get("source") === "assignment" ? "assignments" : "practice"}));
+    : user.role === "teacher" ? link("records", "返回学情总览", "secondary") : link("learning-center", "返回学生画像", "secondary", {tab:ctx.params.get("source") === "assignment" ? "assignments" : "practice"}));
   layout(`<div class="learning-panel"><span class="eyebrow">DEEPSEEK · LEARNING FEEDBACK</span><h1>${title}</h1><p id="analysis-record" class="muted"></p><p class="muted">${description}</p><p id="analysis-note" class="muted"></p><div id="analysis-status" role="status" aria-live="polite"><p id="analysis-message">正在读取分析状态…</p><progress id="analysis-progress" max="100" aria-label="AI 分析进度"></progress><small id="analysis-detail"></small></div><div class="actions"><button class="primary" id="analysis-start">生成 AI 分析</button><a class="secondary" id="analysis-view" href="#" target="_blank" rel="noopener" hidden>查看分析报告 ↗</a><a class="secondary" id="analysis-download" href="#" download hidden>下载 HTML ↓</a></div><button type="button" class="key-settings" id="analysis-key">设置 / 更换 DeepSeek 密钥</button><div class="actions">${backLink}</div></div>`, title);
   root.querySelector("#analysis-note").textContent = options.note || "";
   await initializeApiKey(config, user, {prompt:false});

@@ -90,3 +90,11 @@
   #platform .checkin-cell span,#platform .checkin-cell i { font-size:11px }
   #platform .plan-budget { grid-template-columns:minmax(0,1fr) }
 }
+#platform .plan-goal-badges { display:flex; align-items:center; flex-wrap:wrap; gap:6px }
+#platform .plan-mastery { margin:16px 0 }
+#platform .plan-mastery h4 { margin:0 0 8px; font-size:16px }
+#platform .plan-point-list { margin:0; padding-inline-start:25px }
+#platform .plan-point-list li { padding:8px 0; border-bottom:1px solid var(--focus-line); color:var(--muted) }
+#platform .plan-point-list li::marker { color:var(--accent); font-weight:700 }
+#platform .plan-point-list strong { color:var(--ink); margin-inline-end:7px; overflow-wrap:anywhere }
+#platform .plan-point-list .tag, #platform .plan-point-list .graph-mastery-status { margin-inline-end:5px }

@@ -202,6 +202,7 @@ class QuizActionTests(unittest.TestCase):
 
         initial = node(self.req(endpoint))
         self.assertIsNone(initial["accuracy"])
+        self.assertIsNone(initial["mastery"]["score"])
         self.assertEqual(initial["evidence"][0]["timestamp"], 72.5)
         self.assertEqual(self.req(f"/api/jobs/{jid}/pages/1"), "page fixture")
         self.assertNotIn("knowledge_graph", self.req(base))
@@ -224,7 +225,9 @@ class QuizActionTests(unittest.TestCase):
         wrong = wrongs[0]
         self.assertEqual(wrong["question_id"], imported_id)
         self.assertEqual(node(self.req(endpoint, account="student-demo-4"))["answered"], 0)
+        self.assertIsNone(node(self.req(endpoint, account="student-demo-4"))["mastery"]["score"])
         self.assertEqual(node(self.req(endpoint, account=teacher))["accuracy"], 50)
+        self.assertEqual(node(self.req(endpoint))["mastery"]["score"], 50)
         self.assertEqual(node(self.req(endpoint))["next_review_at"], wrong["next_review_at"])
         self.assertIn(wrong["id"], {item["id"] for item in self.req("/api/review/due")})
 
@@ -232,10 +235,12 @@ class QuizActionTests(unittest.TestCase):
         self.assertTrue(review["correct"])
         self.assertNotEqual(review["next_review_at"], wrong["next_review_at"])
         self.assertEqual(node(self.req(endpoint))["next_review_at"], review["next_review_at"])
+        self.assertEqual(node(self.req(endpoint))["mastery"]["status"], "mastered")
         summary = node(self.req(endpoint, account=teacher))
         self.assertEqual((summary["answered"], summary["correct"], summary["review_count"], summary["review_correct"]),
                          (2, 1, 1, 1))
         self.assertNotIn("next_review_at", summary)
+        self.assertNotIn("mastery", summary)
         self.assertEqual(self.req("/api/learning-records")[0]["score"], submission["score"])
 
         copied = self.req(f"{base}/duplicate", {}, teacher)
@@ -261,6 +266,63 @@ class QuizActionTests(unittest.TestCase):
                          ["knowledge_point_id"], loop)
         self.assertEqual(self.req(f"/api/wrong-questions?course_id={cid}&knowledge_point_id={loop}")[0]["id"], wrong["id"])
         self.assertEqual(self.req("/api/learning-records")[0]["score"], submission["score"])
+
+    def test_graph_plan_prioritizes_prerequisites_and_only_credits_new_targeted_practice(self):
+        teacher, student = "teacher-demo-1", "student-demo-4"
+        course = self.req("/api/courses", {"title": "图谱补弱计划验收", "major_ids": ["m-soft"]}, teacher)
+        cid = course["id"]
+        base = f"/api/courses/{cid}"
+        chapter = course["chapters"][0]["id"]
+        for index, name in enumerate(("基础", "综合", "综合", "回顾")):
+            course = self.req(f"{base}/questions", {"chapter_id": chapter, "text": f"知识点测评 {index}",
+                                                   "options": ["正确项", "错误项"], "answer": 0,
+                                                   "knowledge_point": name}, teacher)
+        foundation, target, known = [point["id"] for point in course["knowledge_points"]]
+        self.req(f"{base}/resources", {"name": "基础知识讲义", "chapter_id": chapter, "content": "练习前阅读概念示例。"}, teacher)
+        prerequisites = [{"before": point, "after": target} for point in (foundation, known)]
+        self.req(f"{base}/knowledge-graph", {"revision": 0, "prerequisites": prerequisites, "evidence": []},
+                 teacher, "PUT")
+        self.req(f"{base}/enrollments", {"student_ids": [student]}, teacher, "PUT")
+        self.req(f"{base}/publish", {}, teacher)
+        bank = {point: [q["id"] for q in course["questions"] if q["knowledge_point_id"] == point]
+                for point in (foundation, target, known)}
+        submission_path = f"{base}/submissions"
+        self.error(400, submission_path, {"knowledge_point_id": "kp1", "answers": {}}, student)
+        self.req(submission_path, {"knowledge_point_id": known, "answers": {bank[known][0]: 0}}, student)
+        first = self.req(submission_path, {"knowledge_point_id": target, "answers": dict(zip(bank[target], (0, 1)))}, student)
+        self.assertEqual(first["total"], 2)
+        self.assertEqual(first["score"], 50)
+
+        plan_url = "/api/student/plan"
+        request = {"graph": {"course_id": cid, "point_id": target}, "weeks": 2, "weekly_minutes": 120}
+        self.addCleanup(self.req, f"{plan_url}/goal", {}, student, "DELETE")
+        self.error(404, f"{plan_url}/parse", request, "student-demo-2")
+        self.error(404, f"{plan_url}/parse", {"graph": {"course_id": cid, "point_id": "kp1"}}, student)
+        self.error(403, f"{plan_url}/parse", request, teacher)
+        preview = self.req(f"{plan_url}/parse", request, student)
+        points = preview["workload"]["points"]
+        self.assertEqual([point["id"] for point in points], [foundation, target])
+        self.assertTrue(points[0]["prerequisite"])
+        self.assertIsNone(points[0]["score"])
+        self.assertEqual(points[1]["score"], 50)
+        self.assertEqual(preview["workload"]["counts"]["resource"], 1)
+        self.assertIsNone(self.req(plan_url, account=student)["plan"]["goal"])
+        plan = self.req(f"{plan_url}/goal", request, student, "PUT")["plan"]
+        self.assertEqual(plan["goal"]["parsed"]["course_ids"], [cid])
+        self.assertEqual(plan["goal"]["parsed"]["weeks"], 2)
+        self.assertEqual([task["point_id"] for task in plan["tasks"]["cards"] if task["kind"] == "practice"],
+                         [foundation, target])
+        self.assertEqual(plan["tasks"]["done"], 0)
+        full = self.req(submission_path, {"knowledge_point_id": target, "answers": dict.fromkeys(bank[target], 0)}, student)
+        self.assertEqual(full["score"], 100)
+        updated = self.req(plan_url, account=student)["plan"]
+        self.assertEqual([point["id"] for point in updated["workload"]["points"]], [])
+        self.assertTrue(next(task for task in updated["tasks"]["cards"] if task["point_id"] == target)["done"])
+        self.error(409, f"{plan_url}/goal", request, student, "PUT")
+        self.req(f"{base}/enrollments", {"student_ids": []}, teacher, "PUT")
+        withdrawn = self.req(plan_url, account=student)["plan"]
+        self.assertEqual(withdrawn["tasks"]["cards"], [])
+        self.error(404, f"{plan_url}/parse", request, student)
 
 
 if __name__=="__main__":unittest.main()

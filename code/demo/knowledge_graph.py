@@ -1,6 +1,83 @@
 """Course knowledge relationships and evidence-backed practice statistics."""
 from collections import defaultdict, deque
 
+from .learning_metrics import _timestamp
+
+
+MASTERY_THRESHOLD = 80
+MASTERY_PRIORITY = {"needs_review": 0, "unassessed": 1, "in_progress": 2}
+
+
+def student_mastery(course, data, student_id):
+    """Summarize the latest marked result per active bank question for this class."""
+    course_id = course["id"]
+    questions = {q["id"]: q["knowledge_point_id"] for q in course.get("questions", [])
+                 if q.get("knowledge_point_id") and q.get("status") != "retired"}
+    latest = {}
+
+    def update(question_id, correct, stamp):
+        if question_id not in questions or type(correct) is not bool:
+            return
+        moment = _timestamp(stamp)
+        if moment is not None and (question_id not in latest or moment >= latest[question_id][0]):
+            latest[question_id] = (moment, correct)
+
+    for submission in data.get("submissions", []):
+        if (submission.get("course_id") != course_id or submission.get("student_id") != student_id
+                or submission.get("assignment_id") or submission.get("type") in {"ai_quiz", "python"}):
+            continue
+        for detail in submission.get("details") or []:
+            update(detail.get("question_id"), detail.get("correct"), submission.get("submitted_at"))
+    for wrong in data.get("wrong_questions", []):
+        if (wrong.get("course_id") == course_id and wrong.get("student_id") == student_id
+                and not wrong.get("assignment_id")):
+            update(wrong.get("question_id"), wrong.get("last_review_result"), wrong.get("last_reviewed_at"))
+
+    point_questions = defaultdict(list)
+    for question_id, point_id in questions.items():
+        point_questions[point_id].append(question_id)
+    result = {}
+    for point in course.get("knowledge_points", []):
+        ids = point_questions[point["id"]]
+        marks = [latest[question_id][1] for question_id in ids if question_id in latest]
+        score = round(sum(marks) * 100 / len(marks)) if marks else None
+        if score is None:
+            status = "unassessed"
+        elif score < MASTERY_THRESHOLD:
+            status = "needs_review"
+        elif len(marks) < len(ids):
+            status = "in_progress"
+        else:
+            status = "mastered"
+        result[point["id"]] = {"score": score, "status": status, "assessed": len(marks),
+                               "correct": sum(marks), "question_count": len(ids)}
+    return result
+
+
+def mastery_plan_order(course, mastery, focus=None):
+    """Put weak prerequisite nodes before their dependants, skipping established mastery."""
+    prerequisites = defaultdict(list)
+    for edge in (course.get("knowledge_graph") or {}).get("prerequisites", []):
+        prerequisites[edge["after"]].append(edge["before"])
+    candidates = [key for key, result in mastery.items() if result["status"] in MASTERY_PRIORITY]
+    candidates.sort(key=lambda key: (MASTERY_PRIORITY[mastery[key]["status"]], mastery[key]["score"] or 0))
+    pending, ordered = set(candidates), []
+
+    def visit(point_id, prerequisite=False):
+        if point_id not in pending:
+            return
+        pending.remove(point_id)
+        for before in prerequisites[point_id]:
+            visit(before, True)
+        ordered.append((point_id, prerequisite))
+
+    if focus is None:
+        for point_id in candidates:
+            visit(point_id)
+    elif focus in pending:
+        visit(focus)
+    return ordered
+
 
 def slide_page(job, page_number):
     if not job or job.get("status") != "completed":
@@ -122,7 +199,9 @@ def graph_view(course, data, student_ids, *, teacher, get_job):
             node["review_correct"] += int(event.get("correct") is True)
 
     pending = defaultdict(list)
+    mastery = {}
     if not teacher:
+        mastery = student_mastery(course, data, next(iter(student_ids)))
         for wrong in data.get("wrong_questions", []):
             if (wrong.get("course_id") == course_id and wrong.get("student_id") in student_ids
                     and not wrong.get("assignment_id") and wrong.get("status") != "mastered"
@@ -131,6 +210,7 @@ def graph_view(course, data, student_ids, *, teacher, get_job):
     for point_id, node in nodes.items():
         node["accuracy"] = round(node["correct"] / node["answered"] * 100) if node["answered"] else None
         if not teacher:
+            node["mastery"] = mastery[point_id]
             node["pending_review_count"] = len(pending[point_id])
             node["next_review_at"] = min(pending[point_id], default=None)
     return {"course_id": course_id, "title": course["title"],
@@ -138,4 +218,5 @@ def graph_view(course, data, student_ids, *, teacher, get_job):
             "scope": "class" if teacher else "student",
             "editable": teacher and course.get("status") != "archived",
             "revision": graph.get("revision", 0), "nodes": list(nodes.values()),
+            **({"mastery_threshold": MASTERY_THRESHOLD} if not teacher else {}),
             "prerequisites": graph.get("prerequisites", [])}

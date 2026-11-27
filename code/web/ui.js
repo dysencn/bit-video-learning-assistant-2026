@@ -29,84 +29,95 @@ export const assignmentSubmissionText = item => item.attempts
 export const stateTag = student => student.not_started ? '<span class="tag neutral">待开始</span>'
   : student.needs_attention ? '<span class="tag attention">需关注</span>' : '<span class="tag published">正常</span>';
 
-const radarDimensions = [
-  ["course_participation", "课程参与率", "课程参与", "已参与", "%"],
-  ["practice_activity", "练习活跃度", "练习活跃", "提交", "%"],
-  ["practice_average", "练习均分", "练习均分", "次练习", "分"],
-  ["practice_accuracy", "练习正确率", "练习正确", "答对", "%"],
-  ["assignment_completion", "作业提交率", "作业提交", "已交", "%"],
-  ["assignment_on_time", "作业按时率", "作业按时", "按时", "%"],
-  ["assignment_average", "作业均分", "作业均分", "份作业", "分"],
-  ["reading_completion", "资料阅读完成率", "资料阅读", "已读", "%"],
-  ["review_accuracy", "错题复习正确率", "错题复习", "答对", "%"],
+export const masteryLabels = {
+  mastered: "已掌握", in_progress: "学习中", needs_review: "待巩固", unassessed: "待测评",
+};
+
+const radarGroups = [
+  {title:"学习投入", graphic:"layers", tone:"engagement", axes:[
+    ["course_participation", "课程参与率", "课程参与", "已参与", "%"],
+    ["practice_activity", "练习活跃度", "练习活跃", "提交", "%"],
+    ["assignment_completion", "作业提交率", "作业提交", "已交", "%"],
+    ["assignment_on_time", "作业按时率", "作业按时", "按时", "%"],
+    ["reading_completion", "资料阅读完成率", "资料阅读", "已读", "%"],
+  ]},
+  {title:"练习与作业表现", graphic:"target", tone:"performance", axes:[
+    ["practice_average", "练习均分", "练习均分", "次练习", "分"],
+    ["practice_accuracy", "练习正确率", "练习正确", "答对", "%"],
+    ["review_accuracy", "错题复习正确率", "复习正确", "答对", "%"],
+    ["assignment_average", "作业均分", "作业均分", "份作业", "分"],
+  ]},
 ];
 
-function radarPlot(dimensions, studentName) {
-  const centerX = 205, centerY = 166;
+function radarValue({metric, unit}) {
+  return Number.isFinite(metric.value) ? `${metric.value}${unit}` : "暂无";
+}
+
+function radarPlot(dimensions, label) {
+  const centerX = 190, centerY = 152;
   const angle = i => -Math.PI / 2 + 2 * Math.PI * i / dimensions.length;
   const point = (i, score) => {
-    const radius = 104 * Math.max(0, Math.min(100, score)) / 100;
+    const radius = 85 * Math.max(0, Math.min(100, score)) / 100;
     return [(centerX + Math.cos(angle(i)) * radius).toFixed(1),
       (centerY + Math.sin(angle(i)) * radius).toFixed(1)];
   };
-  const positions = dimensions.map(({metric}, i) => point(i, metric.value));
+  const positions = dimensions.map(({metric}, i) => Number.isFinite(metric.value) ? point(i, metric.value) : null);
   const rings = [25, 50, 75, 100].map(level => `<polygon class="radar-ring" points="${dimensions.map((_, i) => point(i, level)).join(" ")}"/>`).join("");
   const axes = dimensions.map((_, i) => {
     const [x, y] = point(i, 100);
-    return `<line class="radar-axis" x1="${centerX}" y1="${centerY}" x2="${x}" y2="${y}"/>`;
+    return `<line class="radar-axis${positions[i] ? "" : " radar-axis-missing"}" x1="${centerX}" y1="${centerY}" x2="${x}" y2="${y}"/>`;
   }).join("");
   const labels = dimensions.map((dimension, i) => {
     const direction = Math.cos(angle(i));
-    const x = (centerX + direction * 121).toFixed(1);
-    const y = (centerY + Math.sin(angle(i)) * 126).toFixed(1);
+    const sine = Math.sin(angle(i));
+    const x = (centerX + direction * 103).toFixed(1);
+    const labelOffset = sine < -.95 || Math.abs(sine) < .36 ? 7 : 0;
+    const y = (centerY + sine * 110 - labelOffset).toFixed(1);
     const anchor = direction < -0.25 ? "end" : direction > 0.25 ? "start" : "middle";
-    return `<text x="${x}" y="${y}" text-anchor="${anchor}">${dimension.axis}</text>`;
+    return `<text x="${x}" y="${y}" text-anchor="${anchor}">${dimension.axis}
+      <tspan x="${x}" dy="21" class="${positions[i] ? "radar-axis-value" : "radar-value-missing"}">${radarValue(dimension)}</tspan></text>`;
   }).join("");
-  const dots = positions.map(([x, y]) => `<circle class="radar-dot" cx="${x}" cy="${y}" r="4"/>`).join("");
-  return `<svg class="radar" viewBox="0 0 410 330" role="img" aria-label="${esc(studentName)}的学习雷达图，共 ${dimensions.length} 项有数据">
-    ${rings}${axes}<polygon class="radar-area" points="${positions.join(" ")}"/>${dots}${labels}</svg>`;
+  const dots = positions.filter(Boolean).map(([x, y]) => `<circle class="radar-dot" cx="${x}" cy="${y}" r="4.5"/>`).join("");
+  const marks = positions.every(Boolean) ? `<polygon class="radar-area" points="${positions.join(" ")}"/>`
+    : positions.map((from, index) => {
+      const to = positions[(index + 1) % positions.length];
+      return from && to ? `<line class="radar-segment" x1="${from[0]}" y1="${from[1]}" x2="${to[0]}" y2="${to[1]}"/>` : "";
+    }).join("");
+  return `<svg class="radar" viewBox="0 0 380 294" role="img" aria-label="${esc(label)}">
+    ${rings}${axes}${marks}${dots}${labels}</svg>`;
 }
 
 function radarRows(dimensions) {
-  return `<dl class="radar-legend">${dimensions.map(({label, countLabel, unit, metric}) => {
-    const value = Number.isFinite(metric.value) ? `${metric.value}${unit}` : "暂无";
+  return `<dl class="radar-legend">${dimensions.map(dimension => {
+    const {label, countLabel, metric} = dimension;
     const count = metric.denominator ? (metric.numerator === undefined ? `${metric.denominator} ${countLabel}`
       : `${countLabel} ${metric.numerator} / ${metric.denominator}`) : "";
     const pending = metric.pending_count ? `待交 ${metric.pending_count} 份` : "";
     const evidence = [count, pending].filter(Boolean).join(" · ");
-    return `<div class="radar-metric"><dt>${label}</dt><dd><strong>${value}</strong>${evidence ? `<small>${esc(evidence)}</small>` : ""}</dd></div>`;
+    return `<div class="radar-metric${Number.isFinite(metric.value) ? "" : " radar-metric-missing"}"><dt>${label}</dt><dd><strong>${radarValue(dimension)}</strong>${evidence ? `<small>${esc(evidence)}</small>` : ""}</dd></div>`;
   }).join("")}</dl>`;
 }
 
 export function radarCard(student, personal = false) {
   const metrics = student.radar_dimensions || {};
-  const available = [], missing = [];
-  for (const [id, label, axis, countLabel, unit] of radarDimensions) {
-    const metric = metrics[id] || {};
-    const group = Number.isFinite(metric.value) ? available : missing;
-    group.push({id, label, axis, countLabel, unit, metric});
-  }
-  let chart = '<p class="radar-empty">暂无可绘制的学习数据</p>';
-  if (available.length >= 3) {
-    chart = radarPlot(available, student.student);
-  } else if (available.length) {
-    chart = `<div class="radar-bars">${available.map(({label, axis, metric}) => `
-      <div><b>${axis}</b><meter min="0" max="100" value="${metric.value}" aria-label="${label}"></meter></div>`).join("")}
-      <div class="radar-bar-scale" aria-hidden="true"><span>0</span><span>50</span><span>100</span></div></div>`;
-  }
-  const pending = missing.find(({id}) => id === "assignment_completion")?.metric.pending_count;
   const title = personal ? "我的学习雷达" : `${esc(student.student)}的学习雷达`;
+  const charts = radarGroups.map(({title, graphic, tone, axes}) => {
+    const dimensions = axes.map(([id, label, axis, countLabel, unit]) => ({label, axis, countLabel, unit, metric:metrics[id] || {}}));
+    const known = dimensions.filter(({metric}) => Number.isFinite(metric.value)).length;
+    return `<section class="radar-section radar-${tone}">
+      <div class="radar-group-heading"><span class="radar-icon">${icon(graphic)}</span><h4>${title}</h4>
+        <span class="radar-coverage">${known} / ${axes.length} 项有数据</span></div>
+      <div class="radar-visual">${radarPlot(dimensions, `${student.student}的${title}雷达图，${axes.length} 项中 ${known} 项有数据`)}</div>
+      ${radarRows(dimensions)}</section>`;
+  }).join("");
   return `<div class="radar-card">
-    <div class="radar-header"><h3>${title}</h3><span class="radar-coverage">${available.length} / ${radarDimensions.length} 项有数据</span></div>
-    <div class="radar-visual">${chart}</div>
-    <div class="radar-copy">
-    ${available.length ? radarRows(available) : ""}
-    ${missing.length ? `<details class="radar-missing"><summary>暂无数据（${missing.length} 项）${pending ? `<small>待交 ${esc(pending)} 份</small>` : ""}</summary>
-      ${radarRows(missing)}</details>` : ""}
-    ${student.weak_points?.length ? `<p class="radar-weak">${icon("target")}优先巩固：${esc(student.weak_points.join("、"))}</p>` : ""}
+    <div class="radar-header"><h3>${title}</h3><span class="radar-coverage">0–100 刻度 · 九项指标</span></div>
+    <div class="radar-compare">${charts}</div>
+    <div class="radar-foot">
+    ${!personal && student.weak_points?.length ? `<p class="radar-weak">${icon("target")}优先巩固：${esc(student.weak_points.join("、"))}</p>` : ""}
     <details class="metric-help"><summary>九个维度如何计算？</summary>
       <p>课程参与按当前可学班级计算。练习活跃度以同一统计范围内的最高自主练习次数为基准。练习均分与正确率来自正式自主练习。</p>
       <p>作业提交率按已交或已到截止时间的作业计算。按时率看首次正式提交，均分取每份作业最近一次正式得分。</p>
-      <p>讲义读到 60% 计入已读。错题复习正确率按有判分结果的复习次数计算。${personal ? "教师画像按该教师的课程统计，数值可能因范围不同而有所差异。" : ""}</p>
+      <p>讲义读到 60% 计入已读。错题复习正确率按有判分结果的复习次数计算。未取得数据的轴显示「暂无」。${personal ? "教师按自己所教的班级统计。" : ""}</p>
     </details></div></div>`;
 }
